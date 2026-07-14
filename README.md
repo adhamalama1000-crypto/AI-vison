@@ -11,7 +11,14 @@ SCADA systems, and other backend services. Those clients talk to it over HTTP
 and WebSockets only — they never touch the cameras directly. A built-in web
 dashboard (served at `/`) drives every feature through the same public API.
 
-**Version:** 3.1.4 · **Python:** 3.10+ · **Stack:** FastAPI · Uvicorn · OpenCV (FFmpeg) · ONNX Runtime · Pydantic v2 · SQLite
+**Version:** 4.0.0 · **Python:** 3.10+ · **Stack:** FastAPI · Uvicorn · OpenCV (FFmpeg) · ONNX Runtime · scikit-learn · Pydantic v2 · SQLite
+
+> **v4.0.0 — Industrial AI Inspection upgrade.** Adds employee attendance,
+> dataset management + validation, a real training / HPO / model-comparison /
+> ONNX-export engine, panel analysis, reference designs, and reference-vs-live
+> inspection, with new dashboard pages for each. See
+> [`CHANGES_v4.0.0.md`](CHANGES_v4.0.0.md) for exactly what is real vs. what
+> needs your dataset/GPU.
 
 ---
 

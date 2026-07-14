@@ -21,7 +21,10 @@ Two concrete implementations, both real (neither fabricates detections):
 
 from __future__ import annotations
 
+import logging
 import os
+import subprocess
+import sys
 from typing import Optional
 
 import cv2
@@ -29,6 +32,54 @@ import numpy as np
 
 from .base import BBox, FaceEmbedder
 from .registry import register
+
+log = logging.getLogger("rtsp_backend.ai")
+
+_INSIGHTFACE_INSTALL_TRIED = False
+
+
+def _try_install_insightface() -> bool:
+    """Best-effort ``pip install insightface`` (Part 1: auto-install if missing).
+
+    Runs at most once per process and is time-bounded so a blocked/offline
+    environment fails cleanly instead of hanging. Returns True if InsightFace is
+    importable afterwards. Never fabricates success.
+    """
+    global _INSIGHTFACE_INSTALL_TRIED
+    if _INSIGHTFACE_INSTALL_TRIED:
+        try:
+            import insightface  # noqa: F401
+            return True
+        except Exception:
+            return False
+    _INSIGHTFACE_INSTALL_TRIED = True
+    log.info("InsightFace missing — attempting automatic installation…")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "insightface"],
+            check=True, timeout=600,
+        )
+        # InsightFace declares a dependency on the GUI ``opencv-python`` wheel,
+        # which installs a second ``cv2`` that clobbers the server's
+        # ``opencv-python-headless`` (and can break APIs like CascadeClassifier).
+        # Restore the headless build so the rest of the platform keeps working.
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "opencv-python"],
+            timeout=120,
+        )
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "--force-reinstall",
+             "opencv-python-headless>=4.9,<5"],
+            timeout=300,
+        )
+    except Exception as exc:
+        log.warning("automatic InsightFace install failed: %s", exc)
+        return False
+    try:
+        import insightface  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 @register
@@ -131,17 +182,28 @@ class InsightFaceEmbedder(FaceEmbedder):
             raise RuntimeError(self._error)
         try:
             from insightface.app import FaceAnalysis  # type: ignore
-        except Exception as exc:  # library not installed
-            self._ready = False
-            self._status = "unavailable"
-            self._reason = "insightface_missing"
-            self._error = f"InsightFace is not installed: {exc}"
-            raise RuntimeError(self._error)
+        except Exception:  # library not installed — auto-install (Part 1)
+            if self.params.get("auto_install", True) and _try_install_insightface():
+                from insightface.app import FaceAnalysis  # type: ignore
+            else:
+                self._ready = False
+                self._status = "unavailable"
+                self._reason = "insightface_missing"
+                self._error = ("InsightFace is not installed and automatic "
+                               "installation failed (offline?). Run "
+                               "`pip install insightface`.")
+                raise RuntimeError(self._error)
         try:
             ctx_id = int(self.params.get("ctx_id", -1))  # -1 = CPU
-            app = FaceAnalysis(name=self.params.get("model_pack", "buffalo_l"))
-            app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+            det = int(self.params.get("det_size", 640))
+            app = FaceAnalysis(
+                name=self.params.get("model_pack", "buffalo_l"),
+                allowed_modules=["detection", "recognition"])
+            app.prepare(ctx_id=ctx_id, det_size=(det, det),
+                        det_thresh=float(self.params.get("det_thresh", 0.5)))
             self._app = app
+            self._cache_key = None
+            self._cache_faces: list = []
             self._ready = True
             self._status = "ready"
             self._error = None
@@ -153,11 +215,19 @@ class InsightFaceEmbedder(FaceEmbedder):
             self._error = f"InsightFace model initialisation failed (weights unavailable?): {exc}"
             raise RuntimeError(self._error)
 
+    def _faces(self, frame: np.ndarray) -> list:
+        """Run detection+recognition once per frame and cache, so detect_faces
+        followed by one embed() per face does not re-run the whole model."""
+        key = (id(frame), frame.shape, int(frame[::37, ::37].sum()))
+        if key != getattr(self, "_cache_key", None):
+            self._cache_faces = self._app.get(frame)
+            self._cache_key = key
+        return self._cache_faces
+
     def detect_faces(self, frame: np.ndarray) -> list[BBox]:
         if not self._ready:
             self.load()
-        faces = self._app.get(frame)
-        self._last = {id(f): f for f in faces}
+        faces = self._faces(frame)
         out = []
         for f in faces:
             b = f.bbox.astype(float)
@@ -167,7 +237,7 @@ class InsightFaceEmbedder(FaceEmbedder):
     def embed(self, frame: np.ndarray, box: BBox) -> Optional[np.ndarray]:
         if not self._ready:
             self.load()
-        faces = self._app.get(frame)
+        faces = self._faces(frame)
         if not faces:
             return None
         # pick the face whose bbox centre is closest to the requested box

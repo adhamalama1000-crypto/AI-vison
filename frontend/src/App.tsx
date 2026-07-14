@@ -6,6 +6,16 @@ import Employees from "./pages/Employees";
 import Events from "./pages/Events";
 import Models from "./pages/Models";
 import Settings from "./pages/Settings";
+import Attendance from "./pages/Attendance";
+import ElectricalDataset from "./pages/ElectricalDataset";
+import Training from "./pages/Training";
+import TrainingProgress from "./pages/TrainingProgress";
+import ModelComparison from "./pages/ModelComparison";
+import ReferenceDesign from "./pages/ReferenceDesign";
+import PanelAnalysis from "./pages/PanelAnalysis";
+import Inspection from "./pages/Inspection";
+import Reports from "./pages/Reports";
+import Metrics from "./pages/Metrics";
 
 export default function App() {
   return (
@@ -13,8 +23,18 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/live" element={<Live />} />
+        <Route path="/metrics" element={<Metrics />} />
         <Route path="/employees" element={<Employees />} />
+        <Route path="/attendance" element={<Attendance />} />
         <Route path="/events" element={<Events />} />
+        <Route path="/datasets" element={<ElectricalDataset />} />
+        <Route path="/training" element={<Training />} />
+        <Route path="/training/:id" element={<TrainingProgress />} />
+        <Route path="/training/:id/comparison" element={<ModelComparison />} />
+        <Route path="/reference" element={<ReferenceDesign />} />
+        <Route path="/panel" element={<PanelAnalysis />} />
+        <Route path="/inspection" element={<Inspection />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="/models" element={<Models />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />

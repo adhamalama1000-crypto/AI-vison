@@ -1,0 +1,7 @@
+# Real ArcFace face recognition (Part 1). The backend auto-installs this on
+# demand when the InsightFace embedder is selected; listed here for explicit
+# installs. NOTE: pip pulls opencv-python as a dep, which clobbers
+# opencv-python-headless — reinstall headless afterwards (the auto-installer
+# does this for you):
+#   pip install insightface && pip install --force-reinstall "opencv-python-headless>=4.9,<5"
+insightface>=0.7

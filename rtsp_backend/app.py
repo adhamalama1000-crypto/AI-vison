@@ -160,7 +160,7 @@ def build_app(settings: Optional[Settings] = None) -> FastAPI:
 
     app = FastAPI(
         title="AI Vision Platform",
-        version="3.1.5",
+        version="4.0.0",
         description=(
             "RTSP-only camera backend with a pluggable AI subsystem (face "
             "recognition, object/component detection, wire analysis), employee "

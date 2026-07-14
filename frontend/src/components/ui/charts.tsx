@@ -1,6 +1,7 @@
 import {
   Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
   RadialBar, RadialBarChart, PieChart, Pie, Cell, CartesianGrid,
+  Bar, BarChart, Line, LineChart, Legend,
 } from "recharts";
 import { useTheme } from "../../hooks/useTheme";
 
@@ -55,6 +56,46 @@ export function RadialGauge({ value, max = 100, label, unit = "%", color = "#336
         <span className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</span>
       </div>
     </div>
+  );
+}
+
+export function SimpleBarChart({ data, dataKey = "value", xKey = "name", color = "#3366ff", height = 220, unit = "" }: {
+  data: any[]; dataKey?: string; xKey?: string; color?: string; height?: number; unit?: string;
+}) {
+  const { theme } = useTheme();
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={gridColor(theme)} vertical={false} />
+        <XAxis dataKey={xKey} tick={{ fill: axisColor(theme), fontSize: 11 }} tickLine={false} axisLine={false} interval={0} angle={data.length > 8 ? -30 : 0} textAnchor={data.length > 8 ? "end" : "middle"} height={data.length > 8 ? 52 : 30} />
+        <YAxis tick={{ fill: axisColor(theme), fontSize: 11 }} tickLine={false} axisLine={false} width={44} allowDecimals={false} />
+        <Tooltip cursor={{ fill: gridColor(theme), opacity: 0.35 }}
+          contentStyle={{ background: theme === "dark" ? "#111624" : "#fff", border: `1px solid ${gridColor(theme)}`, borderRadius: 12, fontSize: 12 }}
+          formatter={(v: any) => [`${v}${unit}`, dataKey]} />
+        <Bar dataKey={dataKey} fill={color} radius={[6, 6, 0, 0]} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function MultiLineChart({ data, series, height = 240, xKey = "t" }: {
+  data: any[]; series: { key: string; color: string; label?: string }[]; height?: number; xKey?: string;
+}) {
+  const { theme } = useTheme();
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={data} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={gridColor(theme)} vertical={false} />
+        <XAxis dataKey={xKey} tick={{ fill: axisColor(theme), fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={30} />
+        <YAxis tick={{ fill: axisColor(theme), fontSize: 11 }} tickLine={false} axisLine={false} width={44} />
+        <Tooltip contentStyle={{ background: theme === "dark" ? "#111624" : "#fff", border: `1px solid ${gridColor(theme)}`, borderRadius: 12, fontSize: 12 }}
+          labelStyle={{ color: axisColor(theme) }} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        {series.map((s) => (
+          <Line key={s.key} type="monotone" dataKey={s.key} name={s.label || s.key} stroke={s.color} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
 

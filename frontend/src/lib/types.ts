@@ -75,6 +75,116 @@ export interface DashboardStats {
   events_total: number;
 }
 
+// ---- Attendance (Part 1) ----
+export interface AttendanceRecord {
+  id: number; employee_id: number | null; employee_name: string | null; camera_name: string | null;
+  confidence: number | null; snapshot: string | null; day: string; created_at: number;
+}
+export interface AttendanceResponse { attendance: AttendanceRecord[]; total: number; }
+export interface AttendanceToday { day: string; records: AttendanceRecord[]; present: number; employees_total: number; }
+export interface AttendanceSummaryRow { day: string; present: number; records: number; }
+export interface AttendanceSummary { summary: AttendanceSummaryRow[]; }
+export interface AttendanceConfig { timeout_seconds: number; }
+
+// ---- Datasets (Part 2) ----
+export interface Dataset {
+  id: number; name: string; kind: string; status: string;
+  n_images: number; n_labels: number; n_classes: number; created_at: number;
+}
+export interface DatasetsResponse { datasets: Dataset[]; total: number; }
+export interface DatasetReport {
+  kind: string; n_images: number; n_labels: number; classes: string[];
+  class_counts: Record<string, number>; missing_labels: string[]; corrupt_images: string[];
+  warnings: string[]; errors: string[]; imbalance_ratio: number | null; n_classes: number; ok: boolean;
+}
+export interface DatasetDetail extends Dataset { classes: string[]; report: DatasetReport; }
+export interface DatasetUploadResult { id: number; name: string; path: string; report: DatasetReport; }
+
+// ---- Training (Parts 3,4,5) ----
+export interface TrainingCatalog {
+  classification_models: string[]; detection_models: string[]; tunable: string[];
+}
+export type TrainingTask = "classification" | "detection";
+export interface TrainingJob {
+  id: number; name: string; task: string; status: string; progress: number;
+  best_model: string | null; created_at: number;
+}
+export interface TrainingResponse { jobs: TrainingJob[]; total: number; }
+export interface TrainingConfig {
+  epochs: number; augment: boolean; hpo: boolean; hpo_trials: number;
+  learning_rate: number; weight_decay: number; early_stopping_patience: number;
+  image_size: number; batch_size: number;
+}
+export interface TrainingResources {
+  cpu_percent: number | null; ram_percent: number | null; ram_used_mb: number | null; gpu_available: boolean;
+}
+export interface TrainingMetrics {
+  model: string | null; epoch: number; epochs: number;
+  train_loss: number | null; val_loss: number | null; accuracy: number | null;
+  precision: number | null; recall: number | null; f1: number | null;
+  learning_rate: number | null; elapsed_s: number | null; eta_s: number | null;
+  resources: TrainingResources;
+}
+export interface TrainingDetail extends TrainingJob {
+  metrics: TrainingMetrics | null; history: TrainingMetrics[];
+  comparison: ComparisonEntry[]; artifacts: Record<string, string> | null;
+}
+export interface ComparisonTestMetrics {
+  accuracy: number | null; loss: number | null; precision: number | null; recall: number | null; f1: number | null;
+}
+export interface ComparisonEntry {
+  model: string; status: string;
+  metrics: { train?: Record<string, number>; val?: Record<string, number>; test: ComparisonTestMetrics };
+  selected: boolean; onnx: { verification: { ok: boolean } } | null; reason: string | null;
+}
+export interface ComparisonResponse { comparison: ComparisonEntry[]; best_model: string | null; }
+export interface StartTrainingBody {
+  name: string; dataset_id?: number | null; task: TrainingTask; models: string[]; config: TrainingConfig;
+}
+export interface StartTrainingResult { job_id: number; status: string; }
+
+// ---- Reference designs (Part 9) ----
+export interface ReferenceDesign {
+  id: number; name: string; kind: string; path: string; description: string | null; created_at: number;
+}
+export interface ReferenceResponse { references: ReferenceDesign[]; total: number; }
+export interface ReferenceSpec {
+  component_counts: Record<string, number>; wire_color_counts: Record<string, number>;
+}
+export interface ReferenceDetail extends ReferenceDesign { spec?: ReferenceSpec | null; }
+export interface ReferenceUploadResult { id: number; name: string; kind: string; path: string; }
+
+// ---- Panel analysis (Part 8) ----
+export interface PanelComponent { label: string; confidence: number | null; bbox: number[]; position: string | null; }
+export interface PanelWire { wire_uid: string; start: string | null; end: string | null; color: string | null; status: string | null; }
+export interface PanelResult {
+  components: PanelComponent[]; component_counts: Record<string, number>; component_total: number;
+  wires: PanelWire[]; wire_color_counts: Record<string, number>; wire_total: number;
+  topology: { nodes: number; edges: number }; notes: string[];
+}
+export interface PanelReport { id: number; title: string; path: string; summary: string | null; created_at: number; }
+export interface PanelsResponse { panels: PanelReport[]; total: number; }
+export interface PanelAnalyzeResult {
+  id: number; result: PanelResult; annotated: string | null; pdf: string | null; json: string | null;
+}
+
+// ---- Inspection (Part 10) ----
+export interface Mismatch { type: string; detail: string | null; expected: unknown; found: unknown; }
+export interface Inspection {
+  id: number; reference_id: number | null; camera_id: string | null; source: string | null;
+  status: string; n_mismatches: number; report_path: string | null; created_at: number;
+}
+export interface InspectionResponse { inspections: Inspection[]; total: number; }
+export interface InspectionRunResult {
+  id: number; status: string; n_mismatches: number; mismatches: Mismatch[];
+  annotated: string | null; pdf: string | null; json: string | null; result: unknown;
+}
+
+// ---- Reports (Parts 8,10) ----
+export interface Report { id: number; kind: string; title: string; path: string; summary: string | null; created_at: number; }
+export interface ReportsResponse { reports: Report[]; total: number; }
+export interface ReportsSummary { by_kind: Record<string, number>; }
+
 export type WSMessage =
   | { type: "hello"; timestamp: number; active_camera: string | null; cameras: Camera[] }
   | { type: "stats"; camera_id: string; timestamp: number; state: string; healthy: boolean; fps: number; latency: CameraLatency; frame_age_ms: number | null; statistics: CameraStatistics }

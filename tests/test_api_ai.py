@@ -89,11 +89,17 @@ def test_status_state_vocabulary_and_reasons(client):
     assert r["state"] in ("loaded", "running")
     assert r["backend"]["ready"] is True
 
-    # selecting the optional InsightFace backend (absent here) surfaces an error + reason
+    # Selecting the optional InsightFace backend surfaces an honest reason and
+    # never silently degrades. The exact reason depends on the host: the library
+    # may be absent (insightface_missing) or present-but-with-unfetchable weights
+    # (init_failed, e.g. the model pack download is blocked). Either way it must
+    # report an error state with a machine-readable reason and detail — the
+    # tested fallback keeps running.
     r = client.post("/api/ai/models/face/select",
-                    json={"backend_id": "insightface_arcface"}).json()
+                    json={"backend_id": "insightface_arcface",
+                          "auto_install": False}).json()
     assert r["state"] == "error"
-    assert r["reason"] == "insightface_missing"
+    assert r["reason"] in ("insightface_missing", "init_failed", "onnxruntime_missing")
     assert r["detail"]
 
     # metrics endpoint carries the same state so the UI can live-update

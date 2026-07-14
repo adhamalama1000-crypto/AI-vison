@@ -3,6 +3,8 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Video, Users, Bell, Cpu, Settings as SettingsIcon,
   Sun, Moon, Menu, X, ScanFace, Activity, Zap, Waypoints,
+  Database, GitCompare, FileText, ScanLine, Layers, ClipboardCheck,
+  GaugeCircle, CalendarCheck,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { useEventSocket } from "../hooks/useEventSocket";
@@ -14,12 +16,22 @@ const NAV = [
   { section: "Overview", items: [
     { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
     { to: "/live", label: "Live Cameras", icon: Video },
+    { to: "/metrics", label: "Metrics", icon: GaugeCircle },
   ]},
   { section: "Recognition", items: [
     { to: "/employees", label: "Employees", icon: Users },
+    { to: "/attendance", label: "Attendance", icon: CalendarCheck },
     { to: "/events", label: "Events", icon: Bell },
   ]},
+  { section: "Electrical AI", items: [
+    { to: "/datasets", label: "Electrical Dataset", icon: Database },
+    { to: "/training", label: "Training", icon: GitCompare },
+    { to: "/reference", label: "Reference Design", icon: Layers },
+    { to: "/panel", label: "Panel Analysis", icon: ScanLine },
+    { to: "/inspection", label: "Inspection", icon: ClipboardCheck },
+  ]},
   { section: "System", items: [
+    { to: "/reports", label: "Reports", icon: FileText },
     { to: "/models", label: "AI Models", icon: Cpu },
     { to: "/settings", label: "Settings", icon: SettingsIcon },
   ]},
@@ -120,8 +132,20 @@ function TopGauge({ icon, label }: { icon: ReactNode; label: string; val?: strin
 
 function titleForPath(p: string): { label: string; sub: string } {
   if (p.startsWith("/live")) return { label: "Live Cameras", sub: "Real-time RTSP streams with AI overlays" };
+  if (p.startsWith("/metrics")) return { label: "Metrics", sub: "System & AI performance dashboard" };
   if (p.startsWith("/employees")) return { label: "Employees", sub: "Enrolment & face recognition management" };
+  if (p.startsWith("/attendance")) return { label: "Attendance", sub: "Face-recognition attendance log & summary" };
   if (p.startsWith("/events")) return { label: "Events", sub: "Recognition & system event log" };
+  if (p.startsWith("/datasets")) return { label: "Electrical Dataset", sub: "Upload & validate training datasets" };
+  if (p.startsWith("/training")) {
+    if (p.includes("/comparison")) return { label: "Model Comparison", sub: "Trained model evaluation & selection" };
+    if (/\/training\/[^/]+$/.test(p)) return { label: "Training Progress", sub: "Live training metrics & controls" };
+    return { label: "Training", sub: "Configure, launch & monitor training jobs" };
+  }
+  if (p.startsWith("/reference")) return { label: "Reference Design", sub: "Reference designs & expected specifications" };
+  if (p.startsWith("/panel")) return { label: "Panel Analysis", sub: "Component & wiring analysis of control panels" };
+  if (p.startsWith("/inspection")) return { label: "Inspection", sub: "Compare panels against reference designs" };
+  if (p.startsWith("/reports")) return { label: "Reports", sub: "Generated analysis & inspection reports" };
   if (p.startsWith("/models")) return { label: "AI Models", sub: "Model configuration & live metrics" };
   if (p.startsWith("/settings")) return { label: "Settings", sub: "Cameras & platform configuration" };
   return { label: "Dashboard", sub: "System overview & live analytics" };

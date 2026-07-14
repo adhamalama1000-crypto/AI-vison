@@ -89,7 +89,9 @@ class ClassicalWireAnalyzer(WireAnalyzer):
             terminals.append((idx, (cx, cy)))
 
         for i, ln in enumerate(lines[:200]):
-            x1, y1, x2, y2 = [float(v) for v in ln[0]]
+            # HoughLinesP returns (N,1,4) on most OpenCV builds but (N,4) on
+            # some; ravel handles both without assuming a leading singleton dim.
+            x1, y1, x2, y2 = [float(v) for v in np.ravel(ln)[:4]]
             # sample colour along the midpoint neighbourhood
             mx, my = int((x1 + x2) / 2), int((y1 + y2) / 2)
             patch = frame[max(0, my - 2):my + 3, max(0, mx - 2):mx + 3]
