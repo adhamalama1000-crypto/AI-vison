@@ -1,0 +1,30 @@
+# Runtime configuration for the AI Vision Platform (RTSP backend).
+#
+# Every camera source MUST be an rtsp:// or rtsps:// URL — USB devices, numeric
+# indices, HTTP streams and local files are rejected at startup. Replace the URL
+# below with your own camera, e.g.:
+#     rtsp://admin:password@192.168.1.10:554/Streaming/Channels/101
+#
+# The default entry points at a local RTSP source so the platform works out of
+# the box for testing / demos.
+
+host: 0.0.0.0
+port: 8090
+stats_interval: 5.0
+active_camera: front_door
+
+data_dir: data
+db_path: data/platform.db
+models_dir: models
+ai_min_interval: 0.2
+
+cameras:
+  - id: front_door
+    name: Front Door
+    url: rtsp://127.0.0.1:8554/cam
+    transport: tcp          # pin TCP; most IP cameras and this demo source use it
+    jpeg_quality: 80
+    reconnect_delay: 2.0
+    max_reconnect_delay: 30.0
+    open_timeout: 10.0
+    read_timeout: 10.0

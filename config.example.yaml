@@ -1,0 +1,27 @@
+# Example configuration for the RTSP camera backend.
+# Copy to config.yaml (or point RTSP_CONFIG at this file) and edit.
+#
+# Every source MUST be an RTSP URL (rtsp:// or rtsps://). USB devices, numeric
+# indices ("0"), HTTP streams, and local video files are rejected at startup.
+
+host: 0.0.0.0
+port: 8000
+stats_interval: 5.0        # seconds between WebSocket telemetry ("stats") events
+active_camera: front_door  # which camera /snapshot and /stream use by default
+
+cameras:
+  - id: front_door
+    name: Front Door
+    url: rtsp://admin:password@192.168.1.10:554/Streaming/Channels/101
+    transport: auto         # auto (default: try tcp, then udp), tcp, or udp
+    jpeg_quality: 80
+
+  - id: yard
+    name: Back Yard
+    url: rtsp://admin:password@192.168.1.11:554/stream1
+    transport: tcp          # pin a transport if your camera needs it
+    reconnect_delay: 2.0        # initial backoff (seconds)
+    max_reconnect_delay: 30.0   # backoff cap (seconds)
+    read_timeout: 10.0          # FFmpeg socket timeout (seconds)
+    max_read_failures: 30       # consecutive failed reads before reconnect
+    # target_fps: 15            # optional: throttle the capture loop

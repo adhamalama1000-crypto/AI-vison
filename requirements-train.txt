@@ -1,0 +1,6 @@
+# Training pipeline dependencies (training/).
+# The runtime backend only needs onnxruntime (already in requirements.txt) to
+# load an exported model; these are needed to TRAIN and export one.
+scikit-learn>=1.3
+skl2onnx>=1.16
+onnx>=1.15

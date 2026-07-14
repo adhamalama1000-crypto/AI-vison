@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Runtime data / models (large binaries, generated at runtime)
+data/
+*.db
+*.db-journal
+models/**/*.onnx
+models/**/*.pt
+models/**/*.engine
+runs/
+outputs/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+frontend/*.tsbuildinfo

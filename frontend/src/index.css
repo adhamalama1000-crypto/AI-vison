@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 248 250 252;
+  --surface: 255 255 255;
+  --surface-2: 248 250 252;
+  --border: 226 232 240;
+  --text: 15 23 42;
+  --muted: 100 116 139;
+  --faint: 148 163 184;
+  --ring: 51 102 255;
+}
+.dark {
+  --bg: 8 11 20;
+  --surface: 17 22 36;
+  --surface-2: 23 30 48;
+  --border: 36 45 66;
+  --text: 226 232 240;
+  --muted: 148 163 184;
+  --faint: 100 116 139;
+  --ring: 89 140 255;
+}
+
+@layer base {
+  * { border-color: rgb(var(--border)); }
+  html, body, #root { height: 100%; }
+  body {
+    background-color: rgb(var(--bg));
+    color: rgb(var(--text));
+    font-family: theme("fontFamily.sans");
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 8px; border: 2px solid rgb(var(--bg)); }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--faint)); }
+}
+
+@layer components {
+  .surface { background-color: rgb(var(--surface)); }
+  .surface-2 { background-color: rgb(var(--surface-2)); }
+  .text-muted { color: rgb(var(--muted)); }
+  .text-faint { color: rgb(var(--faint)); }
+
+  .card {
+    @apply rounded-2xl border shadow-sm;
+    background-color: rgb(var(--surface));
+    border-color: rgb(var(--border));
+  }
+  .card-hover { @apply transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5; }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold
+           transition-all duration-150 select-none whitespace-nowrap disabled:opacity-50 disabled:pointer-events-none
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2;
+    --tw-ring-color: rgb(var(--ring));
+    --tw-ring-offset-color: rgb(var(--bg));
+  }
+  .btn-primary { @apply btn text-white bg-brand-600 hover:bg-brand-700 active:scale-[.98] shadow-sm shadow-brand-600/30; }
+  .btn-ghost { @apply btn; background: transparent; color: rgb(var(--text)); }
+  .btn-ghost:hover { background-color: rgb(var(--surface-2)); }
+  .btn-outline { @apply btn border; background: transparent; color: rgb(var(--text)); border-color: rgb(var(--border)); }
+  .btn-outline:hover { background-color: rgb(var(--surface-2)); }
+  .btn-danger { @apply btn text-white bg-rose-600 hover:bg-rose-700 active:scale-[.98]; }
+  .btn-sm { @apply px-3 py-1.5 text-xs rounded-lg; }
+  .btn-icon { @apply btn p-2 rounded-lg; }
+
+  .input {
+    @apply w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none transition-all;
+    background-color: rgb(var(--surface-2));
+    border-color: rgb(var(--border));
+    color: rgb(var(--text));
+  }
+  .input:focus { border-color: rgb(var(--ring)); box-shadow: 0 0 0 3px rgb(var(--ring) / 0.18); }
+  .input::placeholder { color: rgb(var(--faint)); }
+  select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+
+  .badge { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold; }
+  .badge-green { @apply badge bg-emerald-500/15 text-emerald-500; }
+  .badge-red { @apply badge bg-rose-500/15 text-rose-500; }
+  .badge-amber { @apply badge bg-amber-500/15 text-amber-500; }
+  .badge-blue { @apply badge bg-brand-500/15 text-brand-400; }
+  .badge-gray { @apply badge; background-color: rgb(var(--surface-2)); color: rgb(var(--muted)); }
+
+  .label { @apply block text-xs font-semibold mb-1.5; color: rgb(var(--muted)); }
+  .kbd { @apply rounded px-1.5 py-0.5 text-[11px] font-mono; background-color: rgb(var(--surface-2)); }
+}
+
+.skeleton { position: relative; overflow: hidden; background-color: rgb(var(--surface-2)); }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--border) / .6), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+.grid-dots {
+  background-image: radial-gradient(rgb(var(--border) / 0.5) 1px, transparent 1px);
+  background-size: 22px 22px;
+}

@@ -1,0 +1,9 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+opencv-python-headless>=4.9,<5
+numpy>=1.26
+pydantic>=2.6
+PyYAML>=6.0
+python-dotenv>=1.0
+onnxruntime>=1.17
+psutil>=5.9
