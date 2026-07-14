@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS face_embeddings (
     embedder    TEXT NOT NULL,          -- which embedder produced this vector
     dim         INTEGER NOT NULL,
     vector      BLOB NOT NULL,          -- float32 little-endian
-    created_at  REAL NOT NULL,
+    quality     REAL,                   -- 0..1 capture quality score
+    meta        TEXT,                   -- JSON: blur, brightness, det_score, bbox, ...
+    created_at  REAL NOT NULL,          -- capture date (epoch seconds)
     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
     FOREIGN KEY (image_id)    REFERENCES employee_images(id) ON DELETE CASCADE
 );
@@ -220,6 +222,19 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys=ON;")
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Additive, idempotent migrations for databases created by an older
+        schema. Only adds missing columns — never drops or rewrites data."""
+        with self._lock:
+            cols = {r["name"] for r in self._conn.execute(
+                "PRAGMA table_info(face_embeddings)").fetchall()}
+            if "quality" not in cols:
+                self._conn.execute("ALTER TABLE face_embeddings ADD COLUMN quality REAL")
+            if "meta" not in cols:
+                self._conn.execute("ALTER TABLE face_embeddings ADD COLUMN meta TEXT")
             self._conn.commit()
 
     # -- low-level ---------------------------------------------------------

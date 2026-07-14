@@ -29,6 +29,44 @@ export interface EmployeesResponse { employees: Employee[]; total: number; }
 export interface FaceVerdict {
   faces: number; ok: boolean; reason: string | null; blur_score: number | null; min_blur: number;
   bbox: number[] | null; multiple_faces: boolean; camera_id?: string; image?: string; face_preview?: string | null;
+  message?: string | null; quality?: number | null; brightness?: number | null; det_score?: number | null;
+}
+
+// ---- Face recognition (real SCRFD + ArcFace pipeline) ----
+export interface FaceConfig {
+  threshold: number; margin: number; match_policy: "average" | "nearest";
+  min_det_score: number; min_blur: number; min_recog_blur: number;
+  min_face_size: number; enroll_min_face_size: number;
+  index_backend: string; faiss_available: boolean; embedder: string;
+  embedding_dim: number | null; enrolled_vectors: number; enrolled_employees: number;
+}
+export interface FaceConfigResponse {
+  config: FaceConfig; backend: string; backend_state: string;
+  backend_detail: string | null; backend_info: BackendInfo; params: Record<string, any>;
+}
+export interface RecognitionRow {
+  id: number; type: string; camera_id: string | null; camera_name: string | null;
+  label: string | null; confidence: number | null; employee_id: number | null;
+  snapshot: string | null; created_at: number;
+}
+export interface RecognitionsResponse { recognitions: RecognitionRow[]; total: number; }
+export interface EmbeddingRow {
+  id: number; image_id: number | null; embedder: string; dim: number;
+  quality: number | null; meta: Record<string, any> | null; created_at: number;
+}
+export interface EmbeddingsResponse { employee_id: number; embeddings: EmbeddingRow[]; total: number; }
+export interface RetrainResult {
+  employee_id: number; images: number; enrolled: number; embedder: string; results: any[];
+}
+export interface DetectedFace {
+  label: string; confidence: number; bbox: number[]; kind: string;
+  identity: string | null; employee_id: number | null;
+  extra: {
+    similarity?: number; similarity_pct?: number; confidence?: number; margin?: number;
+    status?: string; quality?: number; blur?: number; min_side?: number;
+    brightness?: number; det_score?: number; reason?: string | null; message?: string | null;
+    closest_name?: string | null;
+  };
 }
 
 export interface RegisterResult {

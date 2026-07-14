@@ -272,4 +272,55 @@ def build_router(ctx: Context) -> APIRouter:
             await asyncio.to_thread(ctx.ai.face_service.reload_cache)
         return {"deleted_image": image_id, "employee_id": emp_id}
 
+    # ---- individual embedding samples -----------------------------------
+
+    @r.get("/{emp_id}/embeddings")
+    async def list_embeddings(emp_id: int):
+        """List an employee's stored face embeddings with quality + metadata."""
+        _get_or_404(emp_id)
+        rows = db.query(
+            "SELECT id, image_id, embedder, dim, quality, meta, created_at "
+            "FROM face_embeddings WHERE employee_id=? ORDER BY created_at DESC",
+            (emp_id,))
+        import json as _json
+        out = []
+        for row in rows:
+            d = dict(row)
+            if d.get("meta"):
+                try:
+                    d["meta"] = _json.loads(d["meta"])
+                except (TypeError, ValueError):
+                    pass
+            out.append(d)
+        return {"employee_id": emp_id, "embeddings": out, "total": len(out)}
+
+    @r.delete("/{emp_id}/embeddings/{emb_id}")
+    async def delete_embedding(emp_id: int, emb_id: int):
+        """Delete a single face embedding sample (keeps the source image)."""
+        row = db.query_one(
+            "SELECT id FROM face_embeddings WHERE id=? AND employee_id=?",
+            (emb_id, emp_id))
+        if row is None:
+            raise NotFound(f"Embedding {emb_id} not found for employee {emp_id}.")
+        db.execute("DELETE FROM face_embeddings WHERE id=?", (emb_id,))
+        if ctx.ai.face_service is not None:
+            await asyncio.to_thread(ctx.ai.face_service.reload_cache)
+        remaining = db.query_one(
+            "SELECT COUNT(*) c FROM face_embeddings WHERE employee_id=?", (emp_id,))["c"]
+        return {"deleted_embedding": emb_id, "employee_id": emp_id,
+                "remaining": remaining}
+
+    @r.post("/{emp_id}/retrain")
+    async def retrain_employee(emp_id: int):
+        """Recompute this employee's embeddings from their stored images with the
+        current recognition model (e.g. after switching model pack)."""
+        _get_or_404(emp_id)
+        if ctx.ai.face_service is None:
+            raise RTSPBackendError("Face service unavailable.", status_code=503,
+                                   code="face_service_unavailable")
+        res = await asyncio.to_thread(
+            ctx.ai.face_service.retrain_employee, emp_id, ctx.data_dir)
+        ctx.ai.ensure_enabled("face")
+        return res
+
     return r

@@ -19,6 +19,7 @@ const NAV = [
     { to: "/metrics", label: "Metrics", icon: GaugeCircle },
   ]},
   { section: "Recognition", items: [
+    { to: "/face-recognition", label: "Face Recognition", icon: ScanFace },
     { to: "/employees", label: "Employees", icon: Users },
     { to: "/attendance", label: "Attendance", icon: CalendarCheck },
     { to: "/events", label: "Events", icon: Bell },
@@ -133,6 +134,7 @@ function TopGauge({ icon, label }: { icon: ReactNode; label: string; val?: strin
 function titleForPath(p: string): { label: string; sub: string } {
   if (p.startsWith("/live")) return { label: "Live Cameras", sub: "Real-time RTSP streams with AI overlays" };
   if (p.startsWith("/metrics")) return { label: "Metrics", sub: "System & AI performance dashboard" };
+  if (p.startsWith("/face-recognition")) return { label: "Face Recognition", sub: "Live SCRFD + ArcFace recognition, threshold & history" };
   if (p.startsWith("/employees")) return { label: "Employees", sub: "Enrolment & face recognition management" };
   if (p.startsWith("/attendance")) return { label: "Attendance", sub: "Face-recognition attendance log & summary" };
   if (p.startsWith("/events")) return { label: "Events", sub: "Recognition & system event log" };

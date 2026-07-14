@@ -8,10 +8,31 @@ to end with genuine image data rather than synthetic stand-ins.
 from __future__ import annotations
 
 import base64
+import os
+
+# Keep the app-level test suite hermetic and fast: the production default face
+# backend is the real InsightFace (SCRFD + ArcFace) pipeline, which would
+# provision ~180 MB of ONNX weights. Tests that need the real backend construct
+# it explicitly (and skip if the weights aren't present); everything else uses
+# the dependency-free deterministic embedder. Set before any backend import.
+os.environ.setdefault("RTSP_FACE_BACKEND", "opencv_fallback")
+
+# Share one provisioned InsightFace weight cache across tests so the (few) tests
+# that exercise the real backend don't each re-download ~180 MB of ONNX. Points
+# at the machine-default InsightFace root when present.
+if "RTSP_FACE_MODEL_ROOT" not in os.environ:
+    _shared = os.path.expanduser("~/.insightface")
+    if os.path.isdir(os.path.join(_shared, "models")):
+        os.environ["RTSP_FACE_MODEL_ROOT"] = _shared
 
 import cv2
 import numpy as np
 import pytest
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: real-model / dataset-backed tests (skip if unavailable)")
 
 
 def _rgb_to_bgr(img):
