@@ -9,6 +9,7 @@ import type {
   PanelsResponse, PanelAnalyzeResult,
   InspectionResponse, InspectionRunResult, Inspection,
   ReportsResponse, ReportsSummary,
+  FaceConfig, FaceConfigResponse, RecognitionsResponse, EmbeddingsResponse, RetrainResult,
 } from "./types";
 
 async function parse<T>(res: Response): Promise<T> {
@@ -63,6 +64,9 @@ export const api = {
   captureImage: (id: number, b: { camera_id?: string; make_profile?: boolean }) =>
     req<any>("POST", `/api/employees/${id}/capture`, b),
   deleteImage: (id: number, imgId: number) => req<any>("DELETE", `/api/employees/${id}/images/${imgId}`),
+  employeeEmbeddings: (id: number) => req<EmbeddingsResponse>("GET", `/api/employees/${id}/embeddings`),
+  deleteEmbedding: (id: number, embId: number) => req<any>("DELETE", `/api/employees/${id}/embeddings/${embId}`),
+  retrainEmployee: (id: number) => req<RetrainResult>("POST", `/api/employees/${id}/retrain`),
 
   events: (q = "") => req<EventsResponse>("GET", `/api/events${q}`),
   eventTypes: () => req<{ types: EventType[] }>("GET", "/api/events/types"),
@@ -75,6 +79,12 @@ export const api = {
   setModelParams: (task: string, params: Record<string, any>) => req<TaskStatus>("POST", `/api/ai/models/${task}/params`, { params }),
   getSettings: () => req<Record<string, any>>("GET", "/api/ai/settings"),
   setSetting: (key: string, value: any) => req<any>("PUT", `/api/ai/settings/${encodeURIComponent(key)}`, { value }),
+
+  // ---- Face recognition config + insight ----
+  faceConfig: () => req<FaceConfigResponse>("GET", "/api/ai/face/config"),
+  setFaceConfig: (b: Partial<FaceConfig>) => req<{ ok: boolean; config: FaceConfig }>("PUT", "/api/ai/face/config", b),
+  faceMessages: () => req<{ messages: Record<string, string> }>("GET", "/api/ai/face/messages"),
+  faceRecognitions: (limit = 50) => req<RecognitionsResponse>("GET", `/api/ai/face/recognitions?limit=${limit}`),
 
   analyze: (camId: string) => req<any>("GET", `/api/cameras/${camId}/analyze`),
 

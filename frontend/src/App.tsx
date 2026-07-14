@@ -3,6 +3,7 @@ import { Layout } from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Live from "./pages/Live";
 import Employees from "./pages/Employees";
+import FaceRecognition from "./pages/FaceRecognition";
 import Events from "./pages/Events";
 import Models from "./pages/Models";
 import Settings from "./pages/Settings";
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/live" element={<Live />} />
         <Route path="/metrics" element={<Metrics />} />
         <Route path="/employees" element={<Employees />} />
+        <Route path="/face-recognition" element={<FaceRecognition />} />
         <Route path="/attendance" element={<Attendance />} />
         <Route path="/events" element={<Events />} />
         <Route path="/datasets" element={<ElectricalDataset />} />

@@ -148,6 +148,22 @@ class FaceEmbedder(ModelBackend):
         """Return a unit-norm float32 embedding for the face crop, or None."""
         raise NotImplementedError
 
+    def detect_and_embed(
+        self, frame: np.ndarray
+    ) -> list[tuple[BBox, Optional[float], Optional[np.ndarray]]]:
+        """Detect every face and embed it in one pass.
+
+        Returns ``(bbox, det_score, embedding)`` per face. ``det_score`` is the
+        detector's confidence for that face (``None`` for detectors that don't
+        expose one). The default implementation composes :meth:`detect_faces`
+        and :meth:`embed`; real backends (e.g. InsightFace) override it to run
+        detection + recognition together and return the genuine det score.
+        """
+        out: list[tuple[BBox, Optional[float], Optional[np.ndarray]]] = []
+        for box in self.detect_faces(frame):
+            out.append((box, None, self.embed(frame, box)))
+        return out
+
 
 class ComponentDetector(ModelBackend):
     task = "components"

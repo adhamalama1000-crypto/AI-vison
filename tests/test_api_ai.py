@@ -89,22 +89,29 @@ def test_status_state_vocabulary_and_reasons(client):
     assert r["state"] in ("loaded", "running")
     assert r["backend"]["ready"] is True
 
-    # Selecting the optional InsightFace backend surfaces an honest reason and
-    # never silently degrades. The exact reason depends on the host: the library
-    # may be absent (insightface_missing) or present-but-with-unfetchable weights
-    # (init_failed, e.g. the model pack download is blocked). Either way it must
-    # report an error state with a machine-readable reason and detail — the
-    # tested fallback keeps running.
+    # Selecting the real InsightFace (SCRFD + ArcFace) backend is honest about
+    # its outcome. Where the verified weights are available it loads and runs;
+    # where they cannot be obtained (library missing / download blocked) it
+    # reports an error state with a machine-readable reason and detail. It must
+    # NEVER silently degrade to the weak fallback — so the outcome is one of
+    # those two explicit states, never a fake "ready".
     r = client.post("/api/ai/models/face/select",
                     json={"backend_id": "insightface_arcface",
                           "auto_install": False}).json()
-    assert r["state"] == "error"
-    assert r["reason"] in ("insightface_missing", "init_failed", "onnxruntime_missing")
-    assert r["detail"]
+    assert r["selected_backend"] == "insightface_arcface"
+    if r["state"] == "error":
+        assert r["reason"] in ("insightface_missing", "weights_unavailable",
+                               "init_failed", "onnxruntime_missing")
+        assert r["detail"]
+    else:
+        # real backend actually loaded — verify it reports as ready
+        assert r["state"] in ("loaded", "running")
+        assert r["backend"]["ready"] is True
+        assert r["backend"]["params"].get("model_pack") in ("buffalo_l", "buffalo_s")
 
     # metrics endpoint carries the same state so the UI can live-update
     m = client.get("/api/ai/metrics").json()
-    assert m["tasks"]["face"]["state"] == "error"
+    assert m["tasks"]["face"]["state"] == r["state"]
     assert m["tasks"]["detection"]["reason"] == "weights_missing"
 
 

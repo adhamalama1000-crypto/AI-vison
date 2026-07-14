@@ -64,3 +64,18 @@ class ModelParams(BaseModel):
 
 class SettingSet(BaseModel):
     value: Any
+
+
+class FaceConfig(BaseModel):
+    """Tunable face-recognition parameters, all optional (partial update)."""
+
+    threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    margin: Optional[float] = Field(None, ge=0.0, le=1.0)
+    match_policy: Optional[str] = Field(None, pattern="^(average|nearest)$")
+    min_det_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    min_blur: Optional[float] = Field(None, ge=0.0)
+    min_recog_blur: Optional[float] = Field(None, ge=0.0)
+    min_face_size: Optional[int] = Field(None, ge=1, le=2000)
+    enroll_min_face_size: Optional[int] = Field(None, ge=1, le=2000)
+    det_size: Optional[int] = Field(None, ge=128, le=1280)
+    model_pack: Optional[str] = Field(None, pattern="^(buffalo_l|buffalo_s)$")

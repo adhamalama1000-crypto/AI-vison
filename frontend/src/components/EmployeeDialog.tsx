@@ -66,9 +66,9 @@ export function EmployeeDialog({ open, onClose, onSaved, cameras, activeCamera, 
           } else setVerdict({ kind: "bad", text: REASON_TEXT[res.enrollment?.reason] || "Rejected" });
         } else {
           setSamples((s) => [...s, { image: v.image!, preview: v.face_preview || v.image!, blur: v.blur_score, multi: v.multiple_faces }]);
-          setVerdict({ kind: v.multiple_faces ? "warn" : "ok", text: v.multiple_faces ? `Captured — multiple faces, largest used (sharpness ${v.blur_score})` : `Captured ✓ (sharpness ${v.blur_score})` });
+          setVerdict({ kind: "ok", text: `Captured ✓ (sharpness ${v.blur_score}${v.quality != null ? `, quality ${(v.quality * 100).toFixed(0)}%` : ""})` });
         }
-      } else setVerdict({ kind: "bad", text: REASON_TEXT[v.reason || ""] || v.reason || "Rejected" });
+      } else setVerdict({ kind: "bad", text: v.message || REASON_TEXT[v.reason || ""] || v.reason || "Rejected" });
     } catch (e: any) {
       setVerdict({ kind: "bad", text: e.status === 503 ? "Camera has no frame yet — check the RTSP connection." : e.message });
     } finally { setCapturing(false); }
@@ -179,7 +179,12 @@ export function EmployeeDialog({ open, onClose, onSaved, cameras, activeCamera, 
           {/* staged samples (new employee) */}
           {!editing && phase === "enroll" && (
             <div>
-              <p className="label">Captured samples ({samples.length})</p>
+              <div className="flex items-center justify-between">
+                <p className="label">Captured samples ({samples.length})</p>
+                <span className={cx("text-xs font-semibold", samples.length >= 10 ? "text-emerald-500" : samples.length >= 5 ? "text-amber-500" : "text-muted")}>
+                  {samples.length >= 15 ? "Great coverage" : samples.length >= 10 ? "Good — aim for 15–20" : `Aim for 10–20 (min 10)`}
+                </span>
+              </div>
               {samples.length ? (
                 <div className="flex flex-wrap gap-2">
                   {samples.map((s, i) => (
@@ -221,7 +226,7 @@ export function EmployeeDialog({ open, onClose, onSaved, cameras, activeCamera, 
           <div className="rounded-xl bg-brand-500/8 p-3.5 text-xs text-brand-400">
             {editing
               ? "Capturing from the live camera enrols a face immediately; recognition updates without a restart."
-              : "Capture at least one valid face from the live camera, then Save. The employee is created and recognition goes live instantly."}
+              : "Capture 15–20 samples across different head angles, lighting and expressions for the most reliable recognition (minimum 10 recommended). Blurry, tiny, badly-lit or multi-face frames are rejected automatically."}
           </div>
           {phase === "verify" && (
             <div className="rounded-xl surface-2 p-3.5 text-xs text-muted">

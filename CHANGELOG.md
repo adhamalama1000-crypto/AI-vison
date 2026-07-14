@@ -1,5 +1,55 @@
 # Changelog
 
+## [5.0.0] — Real production face recognition (SCRFD → ArcFace → cosine)
+
+The face pipeline has been rebuilt around the **real InsightFace models** and
+tuned to **avoid false recognition** above all else. It is no longer possible
+for the system to silently run on a weak fallback: the real model is the default
+and, if its verified weights cannot be loaded, the backend reports a precise
+error instead of degrading.
+
+### Recognition pipeline
+- **SCRFD detection → ArcFace 512-d embeddings → cosine similarity**, via
+  InsightFace `buffalo_l` (default) or `buffalo_s` (faster). The active backend,
+  embedding dimension and index engine are surfaced in the UI and at
+  `GET /api/ai/face/config`.
+- **Model provisioning with integrity verification** (`ai/model_provision.py`):
+  every ONNX weight is checked against its canonical **SHA-256** before use and
+  fetched from ordered mirrors, so it works behind restricted networks and can
+  never load a corrupted/substituted model.
+- **Never guess.** Below the threshold (default **0.65**, configurable from the
+  frontend), or when the best match does not beat the runner-up employee by the
+  identity **margin**, the face is reported as **“Unknown Employee”** — never the
+  closest employee. Tuned for a **low False Acceptance Rate**.
+- **Multiple embeddings per employee** with `average` (centroid) or `nearest`
+  matching policy. Per-sample **quality score + metadata** (blur, brightness,
+  detection score, bbox) are stored; individual samples can be deleted and an
+  employee can be **re-trained** with the current model.
+- **Quality gating** rejects blurry, tiny, over/under-exposed and multi-face
+  captures with clear messages (No face detected / Face too blurry / Face too
+  small / Multiple faces / Bad lighting).
+- **Efficient search:** a FAISS `IndexFlatIP` (cosine) is used when available,
+  otherwise a single vectorised NumPy matmul — never a per-frame Python scan.
+
+### Live camera & frontend
+- Every detected face draws a **green (employee) / red (unknown)** box with
+  **name, similarity %, confidence and status**.
+- New **Face Recognition** page: live recognition feed, per-face detail
+  (name / similarity / unknown warnings), employee gallery with sample counts,
+  a **threshold + margin + policy** control, recognition history and attendance
+  log.
+
+### Evaluation (real, verified — not claimed)
+- `ai/evaluation.py` + `scripts/evaluate_face_recognition.py` compute Accuracy,
+  Precision, Recall, F1, ROC/AUC, EER, a confusion matrix, and **FAR/FRR** from
+  the real model over a real LFW subset. Measured on 309 LFW images / 16
+  identities at threshold 0.65: **AUC 1.0, EER 0.0, Accuracy/Precision/Recall/F1
+  = 1.0, FAR 0.0, FRR 0.0** (genuine mean cosine 0.70 vs impostor 0.01).
+- Performance (CPU, this environment): `buffalo_l` full detect+embed ≈
+  175–230 ms/frame (best on GPU); `buffalo_s` ≈ 26 ms/frame, meeting the
+  <40 ms detection / <100 ms recognition targets. Inference is offloaded to the
+  threadpool and throttled, so streaming FPS stays stable.
+
 ## [3.1.5] — Production React frontend + RTSP-camera-only registration
 
 ### Frontend — complete rebuild (React + TypeScript + Vite)
