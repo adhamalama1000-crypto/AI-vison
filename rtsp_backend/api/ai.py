@@ -32,6 +32,13 @@ def build_router(ctx) -> APIRouter:
     async def catalog():
         return ai.full_status()["catalog"]
 
+    @r.get("/opencv")
+    async def opencv_health():
+        """Report whether the OpenCV install is healthy, and the fix command if
+        conflicting opencv-python / opencv-python-headless wheels are present."""
+        from ..opencv_guard import diagnose
+        return diagnose()
+
     @r.get("/metrics")
     async def metrics():
         st = ai.full_status()

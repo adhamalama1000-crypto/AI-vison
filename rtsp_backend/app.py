@@ -121,6 +121,14 @@ async def _mjpeg_stream(
 
 def build_app(settings: Optional[Settings] = None) -> FastAPI:
     settings = settings or load_settings()
+    # Warn early (and optionally self-repair) if the OpenCV install is broken /
+    # conflicted, so face detection doesn't fail later with a cryptic
+    # AttributeError: module 'cv2' has no attribute 'CascadeClassifier'.
+    try:
+        from .opencv_guard import check_and_warn
+        check_and_warn(auto_repair=settings.allow_auto_install)
+    except Exception:
+        pass
     bus = EventBus()
     manager = CameraManager(event_sink=bus.publish_threadsafe)
 

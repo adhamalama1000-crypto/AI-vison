@@ -90,6 +90,18 @@ class OpenCVFallbackEmbedder(FaceEmbedder):
     dim = 160  # 64 intensity + 96 gradient-orientation bins
 
     def load(self) -> None:
+        # A conflicting opencv-python / opencv-python-headless install produces a
+        # broken cv2 where CascadeClassifier / cv2.data vanish. Detect that and
+        # fail with an actionable message instead of a bare AttributeError.
+        if not hasattr(cv2, "CascadeClassifier") or not hasattr(cv2, "data"):
+            from ..opencv_guard import FIX_COMMAND
+            self._ready = False
+            self._status = "error"
+            self._reason = "opencv_broken"
+            self._error = (
+                "cv2 is missing CascadeClassifier/data — conflicting OpenCV "
+                f"packages are installed. Fix with:  {FIX_COMMAND}")
+            raise RuntimeError(self._error)
         cascade_path = os.path.join(
             cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
         )

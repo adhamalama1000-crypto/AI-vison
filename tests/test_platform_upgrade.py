@@ -331,6 +331,32 @@ def test_zip_bomb_and_slip_guarded(tmp_path):
         dsv.safe_extract_zip(str(many), str(tmp_path / "out2"), max_files=10)
 
 
+def test_opencv_guard_diagnose():
+    from rtsp_backend import opencv_guard
+    d = opencv_guard.diagnose()
+    assert set(d) >= {"healthy", "packages", "conflict", "fix"}
+    assert "opencv-python-headless" in d["fix"]
+    # check_and_warn must never raise, even if it decides to warn
+    opencv_guard.check_and_warn(auto_repair=False)
+
+
+def test_fallback_embedder_clear_error_on_broken_cv2(monkeypatch):
+    """A conflicting OpenCV install strips cv2.CascadeClassifier. The embedder
+    must raise an actionable RuntimeError, not a bare AttributeError."""
+    import cv2
+    from rtsp_backend.ai.embedders import OpenCVFallbackEmbedder
+    monkeypatch.delattr(cv2, "CascadeClassifier", raising=False)
+    emb = OpenCVFallbackEmbedder()
+    with pytest.raises(RuntimeError) as exc:
+        emb.load()
+    assert "opencv-python-headless" in str(exc.value)  # includes the fix command
+
+
+def test_opencv_health_endpoint(client):
+    d = client.get("/api/ai/opencv").json()
+    assert "healthy" in d and "fix" in d
+
+
 def test_training_reports_unknown_models(client):
     body = {"name": "u", "task": "classification",
             "models": ["mlp", "totally_made_up_arch"],
