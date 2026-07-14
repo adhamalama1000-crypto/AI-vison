@@ -509,7 +509,7 @@ def build_app(settings: Optional[Settings] = None) -> FastAPI:
     # -- REST API routers --------------------------------------------------
 
     ctx = Context(db=db, manager=manager, ai=ai_manager, pipeline=pipeline,
-                  bus=bus, data_dir=settings.data_dir)
+                  bus=bus, data_dir=settings.data_dir, models_dir=settings.models_dir)
     for router in build_all_routers(ctx):
         app.include_router(router)
 

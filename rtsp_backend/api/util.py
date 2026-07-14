@@ -28,6 +28,7 @@ class Context:
     pipeline: object         # AIPipeline
     bus: object              # EventBus
     data_dir: str
+    models_dir: str = "models"
 
 
 def decode_image(data: str) -> np.ndarray:

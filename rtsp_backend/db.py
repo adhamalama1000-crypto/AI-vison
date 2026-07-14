@@ -109,6 +109,88 @@ CREATE TABLE IF NOT EXISTS model_config (
     updated_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS attendance (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id INTEGER NOT NULL,
+    employee_name TEXT,
+    camera_id   TEXT,
+    camera_name TEXT,
+    confidence  REAL,
+    snapshot    TEXT,                   -- relative path under the data dir
+    day         TEXT NOT NULL,          -- YYYY-MM-DD local date, for once-per-day queries
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS datasets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    kind        TEXT,                   -- yolo|coco|voc|classification|images|videos|mixed|unknown
+    path        TEXT NOT NULL,          -- relative path under the data dir
+    status      TEXT NOT NULL DEFAULT 'uploaded',  -- uploaded|validating|valid|invalid|error
+    n_images    INTEGER DEFAULT 0,
+    n_labels    INTEGER DEFAULT 0,
+    n_classes   INTEGER DEFAULT 0,
+    classes     TEXT,                   -- JSON list of class names
+    report      TEXT,                   -- JSON validation report
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS training_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    dataset_id  INTEGER,
+    task        TEXT,                   -- classification|detection
+    models      TEXT,                   -- JSON list of model architectures to train
+    config      TEXT,                   -- JSON hyperparameters / options
+    status      TEXT NOT NULL DEFAULT 'queued',  -- queued|running|paused|stopped|completed|failed
+    progress    REAL DEFAULT 0.0,
+    metrics     TEXT,                   -- JSON latest metrics
+    history     TEXT,                   -- JSON list of per-epoch metric snapshots
+    comparison  TEXT,                   -- JSON per-model comparison + selected best
+    best_model  TEXT,
+    artifacts   TEXT,                   -- JSON list of exported artifact paths
+    error       TEXT,
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL,
+    FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS reference_designs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    kind        TEXT,                   -- pdf|image|dxf|dwg|other
+    path        TEXT NOT NULL,          -- relative path under the data dir
+    description TEXT,
+    spec        TEXT,                   -- JSON expected components/wires (for inspection)
+    created_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inspections (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference_id  INTEGER,
+    camera_id     TEXT,
+    source        TEXT,                 -- camera|upload
+    status        TEXT,                 -- pass|fail|warning
+    n_mismatches  INTEGER DEFAULT 0,
+    result        TEXT,                 -- JSON full comparison result
+    snapshot      TEXT,
+    report_path   TEXT,
+    created_at    REAL NOT NULL,
+    FOREIGN KEY (reference_id) REFERENCES reference_designs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,          -- panel_analysis|inspection|training|dataset
+    title       TEXT,
+    ref_id      INTEGER,                -- id of the source row (inspection/panel/etc.)
+    path        TEXT,                   -- relative path of PDF/JSON under the data dir
+    summary     TEXT,                   -- JSON short summary
+    created_at  REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT,
@@ -118,6 +200,9 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type    ON events(type);
 CREATE INDEX IF NOT EXISTS idx_emb_employee   ON face_embeddings(employee_id);
+CREATE INDEX IF NOT EXISTS idx_att_day        ON attendance(day);
+CREATE INDEX IF NOT EXISTS idx_att_employee   ON attendance(employee_id, day);
+CREATE INDEX IF NOT EXISTS idx_insp_created   ON inspections(created_at);
 """
 
 

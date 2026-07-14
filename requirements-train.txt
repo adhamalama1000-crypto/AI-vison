@@ -1,6 +1,8 @@
-# Training pipeline dependencies (training/).
+# Training pipeline dependencies (training/ + rtsp_backend/training_svc.py).
 # The runtime backend only needs onnxruntime (already in requirements.txt) to
 # load an exported model; these are needed to TRAIN and export one.
 scikit-learn>=1.3
 skl2onnx>=1.16
 onnx>=1.15
+optuna>=3.4            # optional: hyperparameter optimisation (Part 5)
+# ultralytics>=8.2     # optional: object-detection training (YOLO/RT-DETR, Part 4)

@@ -29,11 +29,16 @@ from .base import ComponentDetector
 from .detectors import _OnnxDetectorBase
 from .registry import register
 
+# Full electrical-component class set (Part 6). Each is an independent detector
+# class. Order is significant: the class index a trained model emits maps
+# through this list, so append new classes at the end when retraining.
 ELECTRICAL_CLASSES = [
-    "circuit_breaker", "mcb", "mccb", "contactor", "relay", "terminal_block",
-    "plc_module", "busbar", "power_supply", "fuse", "vfd", "push_button",
-    "indicator_lamp", "emergency_stop", "current_transformer",
-    "voltage_transformer", "sensor", "industrial_connector",
+    "mcb", "mccb", "acb", "fuse", "relay", "contactor", "plc", "vfd",
+    "current_transformer", "voltage_transformer", "power_supply",
+    "terminal_block", "push_button", "selector_switch", "indicator_lamp",
+    "emergency_stop", "energy_meter", "protection_relay", "motor_starter",
+    "capacitor", "din_rail", "busbar", "neutral_bar", "earth_bar",
+    "cable_tray", "wire_duct", "copper_bus",
 ]
 
 

@@ -7,3 +7,5 @@ PyYAML>=6.0
 python-dotenv>=1.0
 onnxruntime>=1.17
 psutil>=5.9
+python-multipart>=0.0.9
+reportlab>=4.0

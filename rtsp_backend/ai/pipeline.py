@@ -74,6 +74,55 @@ class AIPipeline:
         self._event_dedup: dict[str, float] = {}
         # per-(camera, task) trackers giving stable IDs to detections
         self._trackers: dict[str, MultiClassTracker] = {}
+        # attendance: last recorded time per employee_id (memory guard on top of
+        # the DB day-key), and a configurable minimum interval between records.
+        self._attendance_last: dict[int, float] = {}
+        try:
+            self.attendance_timeout = float(db.get_setting("attendance_timeout_s", 28800.0))
+        except Exception:
+            self.attendance_timeout = 28800.0  # 8h default: once per work shift
+
+    def set_attendance_timeout(self, seconds: float) -> None:
+        """Update the minimum interval between two attendance records for the
+        same employee (also persisted as a setting by the API)."""
+        self.attendance_timeout = max(0.0, float(seconds))
+
+    def _record_attendance(self, employee_id, name, camera_id, camera_name,
+                           confidence, frame) -> None:
+        """Record attendance at most once per ``attendance_timeout`` per employee.
+
+        Guards on both an in-memory last-seen timestamp (fast path) and a
+        persisted ``day`` key so a restart within the same day does not create a
+        duplicate for a once-per-day timeout. Never fabricates: only called when
+        the face service has positively matched a known employee.
+        """
+        now = time.time()
+        last = self._attendance_last.get(employee_id, 0.0)
+        if self.attendance_timeout and (now - last) < self.attendance_timeout:
+            return
+        import time as _t
+        day = _t.strftime("%Y-%m-%d", _t.localtime(now))
+        # For long timeouts (>= ~a day) enforce one row per calendar day.
+        if self.attendance_timeout >= 43200:
+            existing = self.db.query_one(
+                "SELECT id FROM attendance WHERE employee_id=? AND day=?",
+                (employee_id, day),
+            )
+            if existing is not None:
+                self._attendance_last[employee_id] = now
+                return
+        self._attendance_last[employee_id] = now
+        snap = self._save_snapshot(frame, "attendance")
+        aid = self.db.insert(
+            "INSERT INTO attendance(employee_id,employee_name,camera_id,camera_name,"
+            "confidence,snapshot,day,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (employee_id, name, camera_id, camera_name, confidence, snap, day, now),
+        )
+        self._emit({
+            "type": "attendance", "attendance_id": aid, "employee_id": employee_id,
+            "employee_name": name, "camera_id": camera_id, "camera_name": camera_name,
+            "confidence": confidence, "snapshot": snap, "timestamp": now,
+        })
 
     def _tracker(self, camera_id: str, task: str) -> MultiClassTracker:
         key = f"{camera_id}:{task}"
@@ -153,6 +202,8 @@ class AIPipeline:
                     self._log_event("face_recognized", camera_id, camera_name,
                                     f.label, f.confidence, employee_id=f.employee_id,
                                     dedup_key=f"face:{camera_id}:{f.employee_id}")
+                    self._record_attendance(f.employee_id, f.label, camera_id,
+                                            camera_name, f.confidence, frame)
                 else:
                     snap = self._save_snapshot(frame, "unknown")
                     self._log_event("unknown_person", camera_id, camera_name,
