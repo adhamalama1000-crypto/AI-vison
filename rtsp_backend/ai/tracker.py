@@ -235,4 +235,11 @@ class MultiClassTracker:
                     self._id_remap[key] = gid
                 input_index = items[di][0]
                 index_to_id[input_index] = gid
+
+        # Prune remap entries for tracks that have been culled, so the map does
+        # not grow without bound on long-running cameras with high track churn.
+        if len(self._id_remap) > 2048:
+            live = {(lbl, t.track_id)
+                    for lbl, tr in self._per_label.items() for t in tr._tracks}
+            self._id_remap = {k: v for k, v in self._id_remap.items() if k in live}
         return index_to_id

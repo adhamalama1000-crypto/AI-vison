@@ -22,7 +22,17 @@ export default function Training() {
   const { push } = useToast();
   const catalog = useQuery({ queryKey: ["training-catalog"], queryFn: api.trainingCatalog });
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: api.datasets });
-  const jobs = useQuery({ queryKey: ["training-jobs"], queryFn: api.training, refetchInterval: 3000 });
+  const jobs = useQuery({
+    queryKey: ["training-jobs"],
+    queryFn: api.training,
+    // Only keep polling while at least one job is still active; stop once all
+    // jobs are terminal so we don't poll indefinitely.
+    refetchInterval: (q) => {
+      const list = q.state.data?.jobs ?? [];
+      const active = list.some((j) => !["completed", "stopped", "failed"].includes(j.status));
+      return active ? 3000 : false;
+    },
+  });
 
   const [name, setName] = useState("");
   const [datasetId, setDatasetId] = useState<string>("demo");
@@ -138,7 +148,7 @@ function JobRow({ job, onChanged }: { job: TrainingJob; onChanged: () => void })
   const { push } = useToast();
   const running = job.status === "running";
   const paused = job.status === "paused";
-  const done = job.status === "completed" || job.status === "finished";
+  const done = job.status === "completed" || job.status === "stopped" || job.status === "finished";
   const pct = Math.round((job.progress ?? 0) * (job.progress <= 1 ? 100 : 1));
 
   const act = async (fn: () => Promise<unknown>, label: string) => {

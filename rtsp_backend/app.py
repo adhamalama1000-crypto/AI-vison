@@ -155,6 +155,14 @@ def build_app(settings: Optional[Settings] = None) -> FastAPI:
                     await task
                 except asyncio.CancelledError:
                     pass
+            # Stop + join any running training threads BEFORE closing the DB, so
+            # they can't write to a closed connection.
+            training = getattr(app.state, "training", None)
+            if training is not None:
+                try:
+                    await asyncio.to_thread(training.shutdown)
+                except Exception:
+                    pass
             manager.stop_all()
             db.close()
 
@@ -175,6 +183,30 @@ def build_app(settings: Optional[Settings] = None) -> FastAPI:
     app.state.db = db
     app.state.ai = ai_manager
     app.state.pipeline = pipeline
+
+    # -- optional API-key gate --------------------------------------------
+    #
+    # When settings.api_key is set, every request must carry it in the
+    # ``X-API-Key`` header or ``?api_key=`` query param. The health check and the
+    # static dashboard shell stay open so liveness probes and the login-less UI
+    # can load. Unset (default) => fully open, which is correct for a trusted
+    # LAN / behind-a-reverse-proxy dev deployment and keeps the test suite simple.
+    if settings.api_key:
+        _OPEN_PREFIXES = ("/health", "/app", "/assets", "/docs", "/openapi.json", "/redoc")
+
+        @app.middleware("http")
+        async def _api_key_guard(request: Request, call_next):
+            path = request.url.path
+            if path == "/" or path.startswith(_OPEN_PREFIXES):
+                return await call_next(request)
+            provided = (request.headers.get("x-api-key")
+                        or request.query_params.get("api_key"))
+            if provided != settings.api_key:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": {"code": "unauthorized",
+                                       "message": "Missing or invalid API key."}})
+            return await call_next(request)
 
     @app.exception_handler(RTSPBackendError)
     async def _handle_backend_error(request: Request, exc: RTSPBackendError):
@@ -497,21 +529,38 @@ def build_app(settings: Optional[Settings] = None) -> FastAPI:
 
     # -- stored media (snapshots, employee images) ------------------------
 
+    # Only these first-path-segment subdirectories under data_dir are servable.
+    # This keeps the SQLite database (data/platform.db, -wal, -shm) and any other
+    # non-media file out of reach even though they live under data_dir.
+    _MEDIA_SUBDIRS = {
+        "snapshots", "employees", "panels", "inspections", "reports", "reference",
+    }
+
     @app.get("/api/media/{path:path}", tags=["media"])
     async def media(path: str):
-        # Prevent path traversal; only serve from within the data dir.
+        # Prevent path traversal; only serve whitelisted media subdirs.
         base = os.path.abspath(settings.data_dir)
         full = os.path.abspath(os.path.join(base, path))
-        if not full.startswith(base + os.sep) or not os.path.isfile(full):
+        rel = os.path.relpath(full, base)
+        top = rel.split(os.sep, 1)[0] if rel not in (".", "") else ""
+        if (
+            not (full == base or full.startswith(base + os.sep))
+            or top not in _MEDIA_SUBDIRS
+            or full.endswith((".db", ".db-wal", ".db-shm", ".db-journal"))
+            or not os.path.isfile(full)
+        ):
             raise RTSPBackendError("Media not found.", status_code=404, code="not_found")
         return FileResponse(full)
 
     # -- REST API routers --------------------------------------------------
 
     ctx = Context(db=db, manager=manager, ai=ai_manager, pipeline=pipeline,
-                  bus=bus, data_dir=settings.data_dir, models_dir=settings.models_dir)
+                  bus=bus, data_dir=settings.data_dir, models_dir=settings.models_dir,
+                  max_upload_bytes=settings.max_upload_bytes)
     for router in build_all_routers(ctx):
         app.include_router(router)
+    # expose the training manager for graceful shutdown (see lifespan)
+    app.state.training = getattr(ctx, "training", None)
 
     # -- frontend (single-page app, served last so /api and /docs win) -----
     #

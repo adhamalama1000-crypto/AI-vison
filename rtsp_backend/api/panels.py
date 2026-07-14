@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-import os
 import time
 from typing import Optional
 
@@ -12,13 +12,13 @@ import numpy as np
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from .. import panel_svc, reports_svc
-from ..api.util import save_image
+from ..api.util import read_upload_capped, save_image
 from ..errors import RTSPBackendError
 
 
 async def _image_from(ctx, upload: Optional[UploadFile], camera_id: Optional[str]):
     if upload is not None:
-        raw = await upload.read()
+        raw = await read_upload_capped(upload, ctx.max_upload_bytes)
         arr = np.frombuffer(raw, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
@@ -60,7 +60,7 @@ def build_router(ctx) -> APIRouter:
         make_pdf: bool = Form(True),
     ):
         img = await _image_from(ctx, file, camera_id)
-        result = panel_svc.analyze(ctx.ai, img, annotate=True)
+        result = await asyncio.to_thread(panel_svc.analyze, ctx.ai, img, True)
         annotated = result.pop("_annotated", None)
 
         annotated_rel = None

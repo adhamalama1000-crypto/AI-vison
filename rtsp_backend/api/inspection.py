@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -12,7 +13,7 @@ import numpy as np
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from .. import inspection_svc, panel_svc, reports_svc
-from ..api.util import save_image
+from ..api.util import read_upload_capped, save_image
 from ..errors import RTSPBackendError
 
 
@@ -73,7 +74,7 @@ def build_router(ctx) -> APIRouter:
 
         # observed image
         if file is not None:
-            raw = await file.read()
+            raw = await read_upload_capped(file, ctx.max_upload_bytes)
             arr = np.frombuffer(raw, dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             source = "upload"
@@ -88,9 +89,9 @@ def build_router(ctx) -> APIRouter:
                                        code="frame_unavailable")
             img, source, camera_id = frame, "camera", cam.config.id
 
-        observed = panel_svc.analyze(ctx.ai, img, annotate=True)
+        observed = await asyncio.to_thread(panel_svc.analyze, ctx.ai, img, True)
         annotated = observed.pop("_annotated", None)
-        expected = _load_spec_for(ctx, ref)
+        expected = await asyncio.to_thread(_load_spec_for, ctx, ref)
         comparison = inspection_svc.compare(expected, observed)
 
         # highlight mismatches on the annotated frame

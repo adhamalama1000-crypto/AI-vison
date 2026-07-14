@@ -38,6 +38,25 @@ export function duration(seconds: number | null | undefined): string {
   return `${sec}s`;
 }
 
+// Report/panel summaries are stored as JSON and arrive parsed as objects.
+// Render them as a short human string instead of crashing on an object child.
+export function summaryText(s: unknown): string {
+  if (s == null) return "—";
+  if (typeof s === "string") return s;
+  if (typeof s === "object") {
+    const o = s as Record<string, any>;
+    const parts: string[] = [];
+    if (o.component_total != null) parts.push(`${o.component_total} components`);
+    if (o.wire_total != null) parts.push(`${o.wire_total} wires`);
+    if (o.status != null) parts.push(String(o.status));
+    if (o.n_mismatches != null) parts.push(`${o.n_mismatches} mismatch${o.n_mismatches === 1 ? "" : "es"}`);
+    if (parts.length) return parts.join(" · ");
+    const keys = Object.keys(o).filter((k) => o[k] != null && typeof o[k] !== "object");
+    return keys.length ? keys.slice(0, 3).map((k) => `${k}: ${o[k]}`).join(" · ") : "—";
+  }
+  return String(s);
+}
+
 export const STATE_TONE: Record<string, "green" | "red" | "amber" | "blue" | "gray"> = {
   connected: "green", running: "green", loaded: "blue", ready: "green",
   connecting: "amber", reconnecting: "amber", loading: "amber", disabled: "gray",

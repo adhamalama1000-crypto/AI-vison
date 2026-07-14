@@ -28,15 +28,27 @@ VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
 # extraction
 # --------------------------------------------------------------------------- #
 
-def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
-    """Extract a zip, guarding against path-traversal (zip-slip)."""
+def safe_extract_zip(zip_path: str, dest_dir: str,
+                     max_total_bytes: int = 5 * 1024 ** 3,
+                     max_files: int = 200_000) -> None:
+    """Extract a zip, guarding against path-traversal (zip-slip) AND
+    decompression bombs: refuse archives whose declared uncompressed size or
+    file count exceed the caps before extracting anything."""
     os.makedirs(dest_dir, exist_ok=True)
     base = os.path.abspath(dest_dir)
     with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.namelist():
-            target = os.path.abspath(os.path.join(dest_dir, member))
+        infos = zf.infolist()
+        if len(infos) > max_files:
+            raise ValueError(f"archive has too many entries ({len(infos)} > {max_files})")
+        total = 0
+        for info in infos:
+            total += info.file_size
+            if total > max_total_bytes:
+                raise ValueError("archive uncompressed size exceeds limit "
+                                 f"({total} > {max_total_bytes} bytes)")
+            target = os.path.abspath(os.path.join(dest_dir, info.filename))
             if not (target == base or target.startswith(base + os.sep)):
-                raise ValueError(f"unsafe path in archive: {member}")
+                raise ValueError(f"unsafe path in archive: {info.filename}")
         zf.extractall(dest_dir)
 
 

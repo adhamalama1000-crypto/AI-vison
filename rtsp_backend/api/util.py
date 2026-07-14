@@ -20,6 +20,54 @@ class BadImageError(RTSPBackendError):
     code = "bad_image"
 
 
+class PayloadTooLargeError(RTSPBackendError):
+    status_code = 413
+    code = "payload_too_large"
+
+
+async def read_upload_capped(upload, max_bytes: int) -> bytes:
+    """Read an UploadFile fully but abort past ``max_bytes`` (memory-DoS guard).
+
+    Reads in chunks so an oversized upload is rejected without first buffering
+    the whole thing into RAM.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise PayloadTooLargeError(
+                f"Upload exceeds the {max_bytes // (1024*1024)} MiB limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def copy_upload_capped(upload, dest_path: str, max_bytes: int) -> int:
+    """Stream an UploadFile to disk, aborting (and removing the partial file)
+    if it exceeds ``max_bytes``. Returns the number of bytes written."""
+    import os as _os
+    total = 0
+    with open(dest_path, "wb") as fh:
+        while True:
+            chunk = upload.file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                fh.close()
+                try:
+                    _os.remove(dest_path)
+                except OSError:
+                    pass
+                raise PayloadTooLargeError(
+                    f"Upload exceeds the {max_bytes // (1024*1024)} MiB limit.")
+            fh.write(chunk)
+    return total
+
+
 @dataclass
 class Context:
     db: object
@@ -29,6 +77,7 @@ class Context:
     bus: object              # EventBus
     data_dir: str
     models_dir: str = "models"
+    max_upload_bytes: int = 536870912
 
 
 def decode_image(data: str) -> np.ndarray:

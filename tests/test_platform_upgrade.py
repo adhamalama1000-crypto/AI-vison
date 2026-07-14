@@ -261,3 +261,82 @@ def test_inspection_compare_logic():
     assert "missing_component" in types      # relay expected, absent
     assert "extra_component" in types        # contactor found, unexpected
     assert res["status"] == "fail"
+
+
+# --------------------------------------------------------------------------- #
+# security hardening (audit fixes)
+# --------------------------------------------------------------------------- #
+
+def _build_client(tmp_path, **overrides):
+    import warnings
+    warnings.filterwarnings("ignore")
+    from fastapi.testclient import TestClient
+    from rtsp_backend.app import build_app
+    from rtsp_backend.config import Settings
+    s = Settings(db_path=str(tmp_path / "platform.db"),
+                 data_dir=str(tmp_path / "data"),
+                 models_dir=str(tmp_path / "models"), cameras=[], **overrides)
+    return TestClient(build_app(s))
+
+
+def test_media_never_serves_the_database(client):
+    # The SQLite DB lives under data_dir; it must not be downloadable.
+    for p in ("platform.db", "platform.db-wal", "platform.db-shm",
+              "../platform.db", "etc/passwd"):
+        assert client.get(f"/api/media/{p}").status_code == 404
+
+
+def test_api_key_required_when_configured(tmp_path):
+    with _build_client(tmp_path, api_key="topsecret") as c:
+        assert c.get("/health").status_code == 200                 # health open
+        assert c.get("/api/datasets").status_code == 401           # gated
+        assert c.get("/api/datasets",
+                     headers={"X-API-Key": "topsecret"}).status_code == 200
+        assert c.get("/api/reports?api_key=topsecret").status_code == 200
+        assert c.get("/api/datasets",
+                     headers={"X-API-Key": "wrong"}).status_code == 401
+
+
+def test_upload_size_cap_enforced(tmp_path):
+    import cv2
+    import numpy as np
+    with _build_client(tmp_path, max_upload_bytes=4096) as c:
+        big = cv2.imencode(".jpg", (np.random.rand(300, 300, 3) * 255).astype("uint8"))[1].tobytes()
+        assert len(big) > 4096
+        r = c.post("/api/panels/analyze",
+                   files={"file": ("b.jpg", big, "image/jpeg")},
+                   data={"make_pdf": "false"})
+        assert r.status_code == 413
+
+
+def test_zip_bomb_and_slip_guarded(tmp_path):
+    import io
+    import zipfile
+    from rtsp_backend import datasets_svc as dsv
+
+    # zip-slip
+    slip = tmp_path / "slip.zip"
+    with zipfile.ZipFile(slip, "w") as z:
+        z.writestr("../../evil.txt", b"x")
+    with pytest.raises(ValueError):
+        dsv.safe_extract_zip(str(slip), str(tmp_path / "out1"))
+
+    # declared-size bomb (tiny file, huge declared size is hard to fake; instead
+    # assert the file-count cap triggers)
+    many = tmp_path / "many.zip"
+    with zipfile.ZipFile(many, "w") as z:
+        for i in range(50):
+            z.writestr(f"f{i}.txt", b"x")
+    with pytest.raises(ValueError):
+        dsv.safe_extract_zip(str(many), str(tmp_path / "out2"), max_files=10)
+
+
+def test_training_reports_unknown_models(client):
+    body = {"name": "u", "task": "classification",
+            "models": ["mlp", "totally_made_up_arch"],
+            "config": {"epochs": 4}}
+    job_id = client.post("/api/training", json=body).json()["job_id"]
+    j = _wait_job(client, job_id)
+    comp = client.get(f"/api/training/{job_id}/comparison").json()["comparison"]
+    assert any(c["model"] == "totally_made_up_arch" and c["status"] == "skipped"
+               for c in comp)

@@ -7,7 +7,7 @@ import { Card, Badge, EmptyState, Skeleton, SectionTitle, Spinner, StatCard } fr
 import { api, mediaUrl } from "../lib/api";
 import type { PanelAnalyzeResult } from "../lib/types";
 import { useCameras, useInvalidate } from "../hooks/useData";
-import { timeAgo, fmt } from "../lib/format";
+import { timeAgo, fmt, summaryText } from "../lib/format";
 import { useToast } from "../hooks/useToast";
 
 export default function PanelAnalysis() {
@@ -74,7 +74,7 @@ export default function PanelAnalysis() {
                 <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand-500/15 text-brand-400"><ScanLine className="h-5 w-5" /></div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-semibold">{p.title}</p>
-                  <p className="truncate text-xs text-muted">{p.summary || "—"} · {timeAgo(p.created_at)}</p>
+                  <p className="truncate text-xs text-muted">{summaryText(p.summary)} · {timeAgo(p.created_at)}</p>
                 </div>
                 <a className="btn-outline btn-sm" href={mediaUrl(p.path)} target="_blank" rel="noreferrer"><FileText className="h-3.5 w-3.5" /> Report</a>
               </div>

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter
 
 from ..ai.manager import TASKS
@@ -53,19 +55,21 @@ def build_router(ctx) -> APIRouter:
     async def select_model(task: str, body: ModelSelect):
         _check(task)
         try:
-            return ai.select(task, body.backend_id, body.params)
+            # model load (ONNX / InsightFace) is blocking CPU/IO — offload it so
+            # it doesn't stall the event loop (and all live streams).
+            return await asyncio.to_thread(ai.select, task, body.backend_id, body.params)
         except KeyError as exc:
             raise RTSPBackendError(str(exc), status_code=400, code="bad_backend")
 
     @r.post("/models/{task}/enable")
     async def enable_model(task: str, body: ModelEnable):
         _check(task)
-        return ai.set_enabled(task, body.enabled)
+        return await asyncio.to_thread(ai.set_enabled, task, body.enabled)
 
     @r.post("/models/{task}/params")
     async def set_params(task: str, body: ModelParams):
         _check(task)
-        return ai.update_params(task, body.params)
+        return await asyncio.to_thread(ai.update_params, task, body.params)
 
     # -- generic settings key/value ---------------------------------------
 

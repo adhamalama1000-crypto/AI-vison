@@ -16,7 +16,12 @@ export default function TrainingProgress() {
   const job = useQuery({
     queryKey: ["training-job", id],
     queryFn: () => api.trainingJob(id),
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
+    // Poll while the job is in a non-terminal state (queued/running/paused);
+    // stop once it reaches a terminal state so we don't poll forever.
+    refetchInterval: (q) => {
+      const s = q.state.data?.status;
+      return s && ["completed", "stopped", "failed"].includes(s) ? false : 1500;
+    },
   });
 
   if (job.isLoading || !job.data) {
@@ -26,7 +31,7 @@ export default function TrainingProgress() {
   const d = job.data;
   const running = d.status === "running";
   const paused = d.status === "paused";
-  const done = d.status === "completed" || d.status === "finished";
+  const done = d.status === "completed" || d.status === "stopped" || d.status === "finished";
   const m: TrainingMetrics | null = d.metrics;
   const res = m?.resources;
   const pct = Math.round((d.progress ?? 0) * (d.progress <= 1 ? 100 : 1));

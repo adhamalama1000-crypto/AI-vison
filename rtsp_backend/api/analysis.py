@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Query
@@ -117,8 +118,8 @@ def build_wires_router(ctx) -> APIRouter:
         if frame is None:
             return {"camera_id": cam.config.id, "nodes": [], "edges": [],
                     "note": "no frame available yet"}
-        res = ctx.pipeline.process(cam.config.id, cam.config.name, frame,
-                                   annotate=False, force=True)
+        res = await asyncio.to_thread(ctx.pipeline.process, cam.config.id,
+                                      cam.config.name, frame, False, True)
         nodes = [{"id": i, "label": c["label"], "bbox": c["bbox"],
                   "position": c.get("position")} for i, c in enumerate(res["components"])]
         edges = [{"wire_uid": w["wire_uid"], "start": w["start"], "end": w["end"],

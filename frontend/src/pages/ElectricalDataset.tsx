@@ -96,7 +96,7 @@ export default function ElectricalDataset() {
                     <p className="truncate font-semibold">{d.name}</p>
                     <p className="text-xs text-muted">{d.kind} · {fmt(d.n_images)} imgs · {fmt(d.n_classes)} classes · {timeAgo(d.created_at)}</p>
                   </div>
-                  <Badge tone={d.status === "ok" ? "green" : d.status === "error" ? "red" : "amber"}>{d.status}</Badge>
+                  <Badge tone={d.status === "valid" ? "green" : d.status === "invalid" ? "red" : "amber"}>{d.status}</Badge>
                   <button className="btn-icon btn-ghost text-rose-500" onClick={(e) => { e.stopPropagation(); setToDelete(d); }}><Trash2 className="h-4 w-4" /></button>
                 </button>
               ))}

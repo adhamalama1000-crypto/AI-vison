@@ -90,7 +90,7 @@ export default function ModelComparison() {
           </div>
         )}
       </Card>
-      <p className="text-xs text-faint">Test loss is reported per model where available; {fmt(rows.length)} model(s) evaluated.</p>
+      {rows.length > 0 && <p className="text-xs text-faint">{fmt(rows.length)} model(s) evaluated · metrics shown are on the held-out test split.</p>}
     </div>
   );
 }

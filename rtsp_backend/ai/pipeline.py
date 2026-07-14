@@ -74,6 +74,16 @@ class AIPipeline:
         self._event_dedup: dict[str, float] = {}
         # per-(camera, task) trackers giving stable IDs to detections
         self._trackers: dict[str, MultiClassTracker] = {}
+        # Serialise process() per camera: the background worker AND request
+        # handlers (analyze/ai-snapshot/topology) can call it for the same camera
+        # concurrently, and it mutates unlocked shared state (trackers, dedup,
+        # attendance, last_result). One lock per camera keeps those consistent.
+        import threading as _threading
+        self._process_locks: dict[str, _threading.Lock] = {}
+        self._locks_guard = _threading.Lock()
+        # throttle component-row persistence (see process()).
+        self._last_comp_persist: dict[str, float] = {}
+        self.component_persist_interval = 2.0
         # attendance: last recorded time per employee_id (memory guard on top of
         # the DB day-key), and a configurable minimum interval between records.
         self._attendance_last: dict[int, float] = {}
@@ -102,14 +112,24 @@ class AIPipeline:
             return
         import time as _t
         day = _t.strftime("%Y-%m-%d", _t.localtime(now))
-        # For long timeouts (>= ~a day) enforce one row per calendar day.
+        # Always consult the DB, not just the in-memory map, so a restart within
+        # the timeout window does not create a duplicate (the in-memory map is
+        # empty after a restart).
         if self.attendance_timeout >= 43200:
+            # long timeout => one row per calendar day
             existing = self.db.query_one(
                 "SELECT id FROM attendance WHERE employee_id=? AND day=?",
                 (employee_id, day),
             )
             if existing is not None:
                 self._attendance_last[employee_id] = now
+                return
+        elif self.attendance_timeout:
+            row = self.db.query_one(
+                "SELECT created_at FROM attendance WHERE employee_id=? "
+                "ORDER BY created_at DESC LIMIT 1", (employee_id,))
+            if row is not None and (now - float(row["created_at"])) < self.attendance_timeout:
+                self._attendance_last[employee_id] = float(row["created_at"])
                 return
         self._attendance_last[employee_id] = now
         snap = self._save_snapshot(frame, "attendance")
@@ -146,15 +166,25 @@ class AIPipeline:
             return rel
         return None
 
+    def _dedup_ok(self, key: Optional[str], window: float = 10.0) -> bool:
+        """Return True (and record the time) if an event for ``key`` may fire
+        now, i.e. none fired within ``window`` seconds. Used to gate BOTH the
+        snapshot write and the event insert so we never write a JPEG per frame
+        for a continuously-visible subject."""
+        if not key:
+            return True
+        now = time.time()
+        if now - self._event_dedup.get(key, 0.0) < window:
+            return False
+        self._event_dedup[key] = now
+        return True
+
     def _log_event(self, etype, camera_id, camera_name, label, conf,
                    employee_id=None, snapshot=None, payload=None, dedup_key=None):
         import json
         now = time.time()
-        if dedup_key:
-            last = self._event_dedup.get(dedup_key, 0)
-            if now - last < 10.0:
-                return
-            self._event_dedup[dedup_key] = now
+        if dedup_key and not self._dedup_ok(dedup_key):
+            return
         eid = self.db.insert(
             "INSERT INTO events(type,camera_id,camera_name,label,confidence,"
             "employee_id,snapshot,payload,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -170,8 +200,22 @@ class AIPipeline:
 
     # -- main --------------------------------------------------------------
 
+    def _camera_lock(self, camera_id: str):
+        with self._locks_guard:
+            lock = self._process_locks.get(camera_id)
+            if lock is None:
+                import threading as _threading
+                lock = _threading.Lock()
+                self._process_locks[camera_id] = lock
+        return lock
+
     def process(self, camera_id: str, camera_name: str, frame: np.ndarray,
                 annotate: bool = True, force: bool = False) -> dict:
+        with self._camera_lock(camera_id):
+            return self._process_locked(camera_id, camera_name, frame, annotate, force)
+
+    def _process_locked(self, camera_id: str, camera_name: str, frame: np.ndarray,
+                        annotate: bool, force: bool) -> dict:
         now = time.monotonic()
         if not force and (now - self._last_run.get(camera_id, 0)) < self.min_interval:
             return self._last_result.get(camera_id, {"faces": [], "objects": [],
@@ -205,10 +249,12 @@ class AIPipeline:
                     self._record_attendance(f.employee_id, f.label, camera_id,
                                             camera_name, f.confidence, frame)
                 else:
-                    snap = self._save_snapshot(frame, "unknown")
-                    self._log_event("unknown_person", camera_id, camera_name,
-                                    "Unknown Person", f.confidence, snapshot=snap,
-                                    dedup_key=f"unknown:{camera_id}")
+                    # Gate the snapshot on the dedup window too, so a person who
+                    # stays in frame doesn't spawn a JPEG on every worker tick.
+                    if self._dedup_ok(f"unknown:{camera_id}"):
+                        snap = self._save_snapshot(frame, "unknown")
+                        self._log_event("unknown_person", camera_id, camera_name,
+                                        "Unknown Person", f.confidence, snapshot=snap)
 
         # --- generic object detection ---
         if self.ai.is_enabled("detection"):
@@ -246,18 +292,26 @@ class AIPipeline:
                 comps = []
                 result["components_error"] = str(exc)
             self.ai.record_infer("components", (time.monotonic() - t0) * 1000)
+            # Persist at most once per component_persist_interval per camera — the
+            # continuous worker calls this ~5x/s, and an unthrottled INSERT per
+            # component per frame grows the table without bound and hammers the
+            # DB lock. The live result still reflects every frame's detections.
+            persist = (now - self._last_comp_persist.get(camera_id, 0.0)) >= self.component_persist_interval
             for c in comps:
                 d = c.to_dict()
                 d["position"] = self._panel_position(c.bbox, frame.shape)
                 result["components"].append(d)
                 if annotated is not None:
                     _draw_box(annotated, c.bbox, c.label, _COLORS["component"], c.confidence)
-                self.db.insert(
-                    "INSERT INTO components(camera_id,name,comp_type,confidence,"
-                    "x1,y1,x2,y2,position,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (camera_id, c.label, c.label, c.confidence, c.bbox.x1, c.bbox.y1,
-                     c.bbox.x2, c.bbox.y2, d["position"], time.time()),
-                )
+                if persist:
+                    self.db.insert(
+                        "INSERT INTO components(camera_id,name,comp_type,confidence,"
+                        "x1,y1,x2,y2,position,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (camera_id, c.label, c.label, c.confidence, c.bbox.x1, c.bbox.y1,
+                         c.bbox.x2, c.bbox.y2, d["position"], time.time()),
+                    )
+            if persist and comps:
+                self._last_comp_persist[camera_id] = now
 
         # --- wire analysis ---
         if self.ai.is_enabled("wires"):

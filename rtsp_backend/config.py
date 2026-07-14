@@ -73,6 +73,18 @@ class Settings(BaseModel):
     # Minimum seconds between AI inference passes per camera (throttle).
     ai_min_interval: float = Field(0.2, ge=0)
 
+    # Optional API key. When set (RTSP_API_KEY), every /api and control request
+    # must present it via the ``X-API-Key`` header or ``?api_key=`` query param;
+    # /health and the static dashboard stay open. Unset => open (dev/test).
+    api_key: Optional[str] = None
+    # Allow an unauthenticated model-select to trigger `pip install insightface`.
+    # Off by default (a public endpoint should not mutate the host environment);
+    # set RTSP_ALLOW_AUTO_INSTALL=1 to enable.
+    allow_auto_install: bool = False
+    # Hard cap (bytes) on a single uploaded file / request body handled by the
+    # dataset / reference / panel / inspection endpoints. Default 512 MiB.
+    max_upload_bytes: int = 536870912
+
 
 def _load_dotenv() -> None:
     """
@@ -135,6 +147,18 @@ def load_settings(path: Optional[str] = None) -> Settings:
         os.environ.get("RTSP_AI_MIN_INTERVAL", data.get("ai_min_interval", 0.2))
     )
 
+    api_key = os.environ.get("RTSP_API_KEY", data.get("api_key")) or None
+
+    def _truthy(v) -> bool:
+        return str(v).lower() in ("1", "true", "yes", "on")
+
+    allow_auto_install = _truthy(
+        os.environ.get("RTSP_ALLOW_AUTO_INSTALL", data.get("allow_auto_install", False))
+    )
+    max_upload_bytes = int(
+        os.environ.get("RTSP_MAX_UPLOAD_BYTES", data.get("max_upload_bytes", 536870912))
+    )
+
     return Settings(
         host=host,
         port=port,
@@ -145,4 +169,7 @@ def load_settings(path: Optional[str] = None) -> Settings:
         db_path=db_path,
         models_dir=models_dir,
         ai_min_interval=ai_min_interval,
+        api_key=api_key,
+        allow_auto_install=allow_auto_install,
+        max_upload_bytes=max_upload_bytes,
     )

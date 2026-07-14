@@ -5,12 +5,12 @@ import { Card, Badge, EmptyState, Skeleton } from "../components/ui/primitives";
 import { ConfirmDialog } from "../components/ui/Dialog";
 import { api, mediaUrl } from "../lib/api";
 import type { Report } from "../lib/types";
-import { timeAgo, fmt } from "../lib/format";
+import { timeAgo, fmt, summaryText } from "../lib/format";
 import { useInvalidate } from "../hooks/useData";
 import { useToast } from "../hooks/useToast";
 
 const KIND_TONE: Record<string, "green" | "amber" | "red" | "blue" | "gray"> = {
-  panel: "blue", inspection: "amber", attendance: "green", training: "gray",
+  panel: "blue", panel_analysis: "blue", inspection: "amber", attendance: "green", training: "gray",
 };
 
 export default function Reports() {
@@ -42,7 +42,7 @@ export default function Reports() {
         </button>
         {kinds.map((k) => (
           <button key={k} onClick={() => setKind(k)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold capitalize transition-all ${kind === k ? "bg-brand-600 text-white" : "surface-2 text-muted hover:text-[rgb(var(--text))]"}`}>
-            {k} ({fmt(byKind[k])})
+            {k.replace(/_/g, " ")} ({fmt(byKind[k])})
           </button>
         ))}
       </div>
@@ -64,7 +64,7 @@ export default function Reports() {
                     <p className="truncate font-semibold">{r.title}</p>
                     <Badge tone={KIND_TONE[r.kind] || "gray"}>{r.kind}</Badge>
                   </div>
-                  <p className="truncate text-xs text-muted">{r.summary || "—"} · {timeAgo(r.created_at)}</p>
+                  <p className="truncate text-xs text-muted">{summaryText(r.summary)} · {timeAgo(r.created_at)}</p>
                 </div>
                 <a className="btn-outline btn-sm" href={mediaUrl(r.path)} target="_blank" rel="noreferrer"><Download className="h-3.5 w-3.5" /> Open</a>
                 <button className="btn-icon btn-ghost text-rose-500" onClick={() => setToDelete(r)}><Trash2 className="h-4 w-4" /></button>

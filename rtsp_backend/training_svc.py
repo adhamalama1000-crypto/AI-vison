@@ -27,11 +27,19 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from typing import Any, Optional
 
 import numpy as np
+
+# Ensure the repo root (parent of the rtsp_backend package) is importable so the
+# ``training`` package resolves regardless of CWD. Done once at import, not from
+# worker threads (which would race on sys.path).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 # Classifier "architectures" that always run on CPU without extra downloads.
 # Each is a real, distinct model family so the comparison is meaningful.
@@ -125,6 +133,18 @@ class TrainingManager:
         self._set_status(job_id, "stopped")
         return True
 
+    def shutdown(self, join_timeout: float = 5.0) -> None:
+        """Signal every running job to stop and join its thread, so training
+        threads don't write to the DB after it's been closed at app shutdown."""
+        with self._lock:
+            controls = list(self._controls.items())
+        for _job_id, c in controls:
+            c.stop.set()
+            c.pause.clear()
+        for _job_id, c in controls:
+            if c.thread is not None and c.thread.is_alive():
+                c.thread.join(timeout=join_timeout)
+
     # -- helpers -----------------------------------------------------------
 
     def _set_status(self, job_id: int, status: str, **extra) -> None:
@@ -196,8 +216,6 @@ class TrainingManager:
 
     def _run_classification(self, job_id, ctrl, models, config, data_dir) -> None:
         from sklearn.model_selection import train_test_split
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from training.dataset import load_dataset
 
         image_size = int(config.get("image_size", 16))
@@ -213,8 +231,13 @@ class TrainingManager:
         if config.get("augment", True):
             X_train, y_train = self._augment(X_train, y_train)
 
-        # choose model panel
-        chosen = [m for m in models if m in CLASSIFIER_MODELS] or ["mlp", "deep_mlp"]
+        # choose model panel. Only substitute the demo default when NO models
+        # were requested at all — never silently swap a caller's (detection/
+        # unknown) request for classifiers they didn't ask for.
+        if not models:
+            chosen = ["mlp", "deep_mlp"]
+        else:
+            chosen = [m for m in models if m in CLASSIFIER_MODELS]
 
         # optional Optuna HPO to pick MLP hyper-parameters
         hpo = None
@@ -225,13 +248,15 @@ class TrainingManager:
                             (json.dumps({**config, "hpo_result": hpo}), job_id))
 
         comparison = []
-        skipped = [m for m in models if m not in CLASSIFIER_MODELS
-                   and m not in DETECTION_MODELS]
         for m in models:
             if m in DETECTION_MODELS:
                 comparison.append({"model": m, "status": "skipped",
                                    "reason": "detection architecture — select a "
                                              "detection dataset + install ultralytics"})
+            elif m not in CLASSIFIER_MODELS:
+                comparison.append({"model": m, "status": "skipped",
+                                   "reason": f"unknown model '{m}' — not a known "
+                                             "classifier or detection architecture"})
         n = len(chosen)
         for i, model_name in enumerate(chosen):
             if ctrl.stop.is_set():
@@ -428,8 +453,6 @@ class TrainingManager:
                 "best_f1": round(study.best_value, 4), "trials": len(study.trials)}
 
     def _export_best(self, job_id, best, ds) -> list[dict]:
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from training.train import export_onnx, verify_onnx
         clf = best.pop("_clf", None)
         artifacts = []

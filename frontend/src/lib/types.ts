@@ -162,7 +162,7 @@ export interface PanelResult {
   wires: PanelWire[]; wire_color_counts: Record<string, number>; wire_total: number;
   topology: { nodes: number; edges: number }; notes: string[];
 }
-export interface PanelReport { id: number; title: string; path: string; summary: string | null; created_at: number; }
+export interface PanelReport { id: number; title: string; path: string; summary: string | Record<string, any> | null; created_at: number; }
 export interface PanelsResponse { panels: PanelReport[]; total: number; }
 export interface PanelAnalyzeResult {
   id: number; result: PanelResult; annotated: string | null; pdf: string | null; json: string | null;
@@ -181,7 +181,7 @@ export interface InspectionRunResult {
 }
 
 // ---- Reports (Parts 8,10) ----
-export interface Report { id: number; kind: string; title: string; path: string; summary: string | null; created_at: number; }
+export interface Report { id: number; kind: string; title: string; path: string; summary: string | Record<string, any> | null; created_at: number; }
 export interface ReportsResponse { reports: Report[]; total: number; }
 export interface ReportsSummary { by_kind: Record<string, number>; }
 

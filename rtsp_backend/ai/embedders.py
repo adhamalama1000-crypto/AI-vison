@@ -183,7 +183,12 @@ class InsightFaceEmbedder(FaceEmbedder):
         try:
             from insightface.app import FaceAnalysis  # type: ignore
         except Exception:  # library not installed — auto-install (Part 1)
-            if self.params.get("auto_install", True) and _try_install_insightface():
+            # Auto-install mutates the host Python env, so it is OFF unless
+            # explicitly enabled (RTSP_ALLOW_AUTO_INSTALL=1 or an auto_install
+            # param) — a public model-select must not trigger a pip install.
+            allow = (str(os.environ.get("RTSP_ALLOW_AUTO_INSTALL", "")).lower()
+                     in ("1", "true", "yes", "on")) or bool(self.params.get("auto_install"))
+            if allow and _try_install_insightface():
                 from insightface.app import FaceAnalysis  # type: ignore
             else:
                 self._ready = False

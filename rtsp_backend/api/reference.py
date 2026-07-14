@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import time
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from pydantic import BaseModel
 
+from ..api.util import copy_upload_capped
 from ..errors import RTSPBackendError
 
 _KIND_BY_EXT = {
@@ -66,8 +66,7 @@ def build_router(ctx) -> APIRouter:
         rel = f"reference/{ts}_{safe}"
         path = os.path.join(ctx.data_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as fh:
-            shutil.copyfileobj(file.file, fh)
+        copy_upload_capped(file, path, ctx.max_upload_bytes)
         ref_id = db.insert(
             "INSERT INTO reference_designs(name,kind,path,description,created_at) "
             "VALUES(?,?,?,?,?)",

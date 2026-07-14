@@ -89,16 +89,20 @@ export default function Metrics() {
                 </thead>
                 <tbody>
                   {cameras.map((c, i) => {
-                    const stats = c.statistics ?? {};
                     const state = c.state ?? "—";
-                    const lat = c.latency?.avg_ms ?? c.latency?.last_ms;
+                    // /api/metrics returns flat per-camera fields (camera_fps,
+                    // frames_captured, frames_dropped, read_ms/stream_latency_ms).
+                    const fpsVal = c.camera_fps ?? c.fps;
+                    const captured = c.frames_captured ?? c.statistics?.frames_captured;
+                    const dropped = c.frames_dropped ?? c.statistics?.frames_dropped;
+                    const lat = c.read_ms ?? c.stream_latency_ms ?? c.latency?.avg_ms ?? c.latency?.last_ms;
                     return (
                       <tr key={c.id ?? i} className="border-b border-[rgb(var(--border))] last:border-0 hover:bg-[rgb(var(--surface-2))]">
                         <td className="px-4 py-3 font-semibold">{c.name ?? c.id ?? `Camera ${i + 1}`}</td>
                         <td className="px-4 py-3"><Badge tone={STATE_TONE[state] || "gray"}><Dot tone={STATE_TONE[state] || "gray"} pulse={state === "connected"} />{state}</Badge></td>
-                        <td className="px-4 py-3 text-right tabular-nums">{fmt(c.fps, 1)}</td>
-                        <td className="hidden px-4 py-3 text-right tabular-nums sm:table-cell">{fmt(stats.frames_captured)}</td>
-                        <td className="hidden px-4 py-3 text-right tabular-nums sm:table-cell">{fmt(stats.frames_dropped)}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">{fmt(fpsVal, 1)}</td>
+                        <td className="hidden px-4 py-3 text-right tabular-nums sm:table-cell">{fmt(captured)}</td>
+                        <td className="hidden px-4 py-3 text-right tabular-nums sm:table-cell">{fmt(dropped)}</td>
                         <td className="hidden px-4 py-3 text-right tabular-nums md:table-cell">{lat != null ? `${fmt(lat, 0)}ms` : "—"}</td>
                       </tr>
                     );

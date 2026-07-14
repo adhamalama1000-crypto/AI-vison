@@ -8,7 +8,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from ..errors import RTSPBackendError
-from ..training_svc import (CLASSIFIER_MODELS, DETECTION_MODELS, TrainingManager)
+from ..training_svc import (CLASSIFIER_MODELS, DETECTION_MODELS, _ULTRA_WEIGHTS,
+                            TrainingManager)
 
 
 class StartBody(BaseModel):
@@ -45,9 +46,20 @@ def build_router(ctx) -> APIRouter:
 
     @r.get("/catalog")
     async def catalog():
+        try:
+            import ultralytics  # noqa: F401
+            have_ultra = True
+        except Exception:
+            have_ultra = False
         return {
             "classification_models": list(CLASSIFIER_MODELS.keys()),
             "detection_models": DETECTION_MODELS,
+            # detection archs that this build can actually train (need
+            # ultralytics installed + a detection dataset). The rest are listed
+            # but will be reported as "skipped" if selected.
+            "detection_models_trainable": (
+                [m for m in DETECTION_MODELS if m in _ULTRA_WEIGHTS] if have_ultra else []),
+            "ultralytics_available": have_ultra,
             "tunable": ["learning_rate", "batch_size", "image_size", "epochs",
                         "weight_decay", "augment", "hpo", "hpo_trials",
                         "early_stopping_patience"],

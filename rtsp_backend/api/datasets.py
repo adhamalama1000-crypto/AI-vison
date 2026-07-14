@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
+from ..api.util import copy_upload_capped
 from ..datasets_svc import detect_kind, safe_extract_zip, validate
 from ..errors import RTSPBackendError
 
@@ -78,8 +80,7 @@ def build_router(ctx) -> APIRouter:
                           if p not in ("", ".", "..")]
             dest = os.path.join(root, *safe_parts) if safe_parts else os.path.join(root, "file")
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with open(dest, "wb") as fh:
-                shutil.copyfileobj(uf.file, fh)
+            copy_upload_capped(uf, dest, ctx.max_upload_bytes)
             # auto-extract a single uploaded zip in place
             if dest.lower().endswith(".zip"):
                 try:
@@ -94,7 +95,7 @@ def build_router(ctx) -> APIRouter:
             "INSERT INTO datasets(name,kind,path,status,created_at,updated_at) "
             "VALUES(?,?,?,?,?,?)",
             (ds_name, "unknown", rel, "validating", time.time(), time.time()))
-        report = _analyze_and_store(ds_id, root)
+        report = await asyncio.to_thread(_analyze_and_store, ds_id, root)
         return {"id": ds_id, "name": ds_name, "path": rel, "report": report}
 
     @r.post("/{ds_id}/revalidate")
@@ -103,7 +104,7 @@ def build_router(ctx) -> APIRouter:
         if not row:
             raise RTSPBackendError("Dataset not found.", status_code=404, code="not_found")
         root = os.path.join(ctx.data_dir, row["path"])
-        report = _analyze_and_store(ds_id, root)
+        report = await asyncio.to_thread(_analyze_and_store, ds_id, root)
         return {"id": ds_id, "report": report}
 
     @r.delete("/{ds_id}")
