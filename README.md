@@ -20,6 +20,15 @@ dashboard (served at `/`) drives every feature through the same public API.
 > [`CHANGES_v4.0.0.md`](CHANGES_v4.0.0.md) for exactly what is real vs. what
 > needs your dataset/GPU.
 
+> **Reference Panel Inspection module.** Learn a known-good electrical panel
+> from RTSP/uploaded images (real per-colour wire tracing, terminal detection,
+> ORB feature embedding, and an electrical graph), then inspect any panel
+> against it and get confidence-scored wiring/component/terminal faults with a
+> green/yellow/red overlay. New **Reference Panels**, **Topology Viewer** and
+> **Datasheets** dashboard pages and a full `/api/reference-panels/*` +
+> `/api/datasheets/*` REST surface. Full details:
+> [`docs/INDUSTRIAL_INSPECTION.md`](docs/INDUSTRIAL_INSPECTION.md).
+
 ---
 
 ## What is real, and what needs a trained model

@@ -43,6 +43,15 @@ def _dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _pt_seg_dist(pt, a, b) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-9:
+        return _dist(pt, a)
+    t = max(0.0, min(1.0, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / L2))
+    return _dist(pt, (a[0] + t * dx, a[1] + t * dy))
+
+
 def _warp_center(H, c) -> tuple[float, float]:
     return _features.warp_point(H, float(c["cx"]), float(c["cy"]))
 
@@ -143,17 +152,29 @@ def compare(reference: dict, observed: dict, observed_bgr=None,
     for rw in ref_wires:
         r_start = (rw["start"][0], rw["start"][1])
         r_end = (rw["end"][0], rw["end"][1])
+        r_mid = _midpoint(r_start, r_end)
+        r_ang = math.degrees(math.atan2(r_end[1] - r_start[1], r_end[0] - r_start[0]))
         best_i, best_score = None, None
         for i, ow in enumerate(obs_wires):
             if i in matched_ow:
                 continue
             o_start = _warp_pt(H, ow["start"])
             o_end = _warp_pt(H, ow["end"])
+            o_mid = _midpoint(o_start, o_end)
             # orientation-agnostic endpoint distance
-            d_direct = _dist(r_start, o_start) + _dist(r_end, o_end)
-            d_flip = _dist(r_start, o_end) + _dist(r_end, o_start)
-            d = min(d_direct, d_flip)
-            if d < 2 * p["wire_end_dist"] and (best_score is None or d < best_score):
+            d_ends = min(_dist(r_start, o_start) + _dist(r_end, o_end),
+                         _dist(r_start, o_end) + _dist(r_end, o_start))
+            # midpoint-to-segment fallback: tolerant to endpoint drift and to a
+            # wire fragmenting into pieces (a fragment's midpoint still lies on
+            # the reference wire, pointing the same way).
+            o_ang = math.degrees(math.atan2(o_end[1] - o_start[1], o_end[0] - o_start[0]))
+            seg_d = max(_pt_seg_dist(o_mid, r_start, r_end),
+                        _pt_seg_dist(o_start, r_start, r_end) * 0.5,
+                        _pt_seg_dist(o_end, r_start, r_end) * 0.5)
+            aligned = _rot_diff(r_ang, o_ang) is not None and _rot_diff(r_ang, o_ang) < 30
+            d = min(d_ends, 2.0 * seg_d if aligned else d_ends)
+            thr = 2 * p["wire_end_dist"]
+            if d < thr and (best_score is None or d < best_score):
                 best_score, best_i = d, i
         if best_i is None:
             errors.append(_err("missing_wire", "error", rw.get("wire_uid"),
@@ -180,9 +201,11 @@ def compare(reference: dict, observed: dict, observed_bgr=None,
                                round(align_conf * 0.8, 3), _midpoint(r_start, r_end)))
         # terminal / source / destination checks
         _check_endpoints(rw, ow, errors, align_conf, _midpoint(r_start, r_end))
-        # loose / disconnected: observed endpoint not near any terminal, but the
-        # reference wire *was* connected there.
-        _check_connection(rw, ow, obs_terms, H, p, errors, align_conf)
+        # loose / disconnected: observed endpoint floats free of any terminal,
+        # measured relative to the reference's own connectivity so an identical
+        # panel never trips it.
+        _check_connection(rw, ow, obs_terms, reference.get("terminals") or [],
+                          H, p, errors, align_conf)
 
     # extra wires
     for i, ow in enumerate(obs_wires):
@@ -268,37 +291,44 @@ def _check_endpoints(rw, ow, errors, conf, pt) -> None:
                            round(conf * 0.7, 3), pt))
 
 
-def _check_connection(rw, ow, obs_terms, H, p, errors, conf) -> None:
-    """loose_wire / disconnected_wire: reference wire was connected at an end
-    but the observed wire's corresponding end floats free of any terminal."""
-    ref_connected_start = bool(rw.get("from_terminal") or rw.get("from_component"))
-    ref_connected_end = bool(rw.get("to_terminal") or rw.get("to_component"))
-    if not obs_terms:
-        return
-    term_pts = [(float(t["x"]), float(t["y"])) for t in obs_terms
-                if t.get("x") is not None]
-    if not term_pts:
-        return
+def _check_connection(rw, ow, obs_terms, ref_terms, H, p, errors, conf) -> None:
+    """loose_wire / disconnected_wire.
 
-    def free(pt_obs) -> float:
-        wp = _warp_pt(H, pt_obs)
-        return min(_dist(wp, tp) for tp in term_pts)
+    For each reference wire END that was connected to a *terminal*, measure how
+    far the observed wire's nearest endpoint (mapped into reference coordinates)
+    sits from the nearest observed terminal, and compare it to the reference
+    wire's own baseline distance. A fault is raised only when the observed end
+    is meaningfully *farther* from a terminal than the reference was — so an
+    identical panel is always clean, regardless of endpoint orientation."""
+    obs_pts = [(float(t["x"]), float(t["y"])) for t in obs_terms if t.get("x") is not None]
+    ref_pts = [(float(t["x"]), float(t["y"])) for t in ref_terms if t.get("x") is not None]
+    if not obs_pts or not ref_pts:
+        return
+    r_start = (rw["start"][0], rw["start"][1])
+    r_end = (rw["end"][0], rw["end"][1])
+    o_start = _warp_pt(H, ow["start"])
+    o_end = _warp_pt(H, ow["end"])
 
-    if ref_connected_start:
-        d = free(ow["start"])
-        if d > p["loose_dist"]:
-            sev = "error" if d > 2 * p["loose_dist"] else "warning"
+    def nearest(pt, pts):
+        return min(_dist(pt, q) for q in pts)
+
+    def obs_end_for(ref_end):
+        # the observed endpoint physically corresponding to this reference end
+        return o_start if _dist(ref_end, o_start) <= _dist(ref_end, o_end) else o_end
+
+    for ref_end, connected in ((r_start, rw.get("from_terminal")),
+                               (r_end, rw.get("to_terminal"))):
+        if not connected:
+            continue
+        baseline = nearest(ref_end, ref_pts)          # how close ref was
+        obs_end = obs_end_for(ref_end)
+        obs_d = nearest(obs_end, obs_pts)
+        regression = obs_d - baseline
+        if regression > p["loose_dist"]:
+            sev = "error" if regression > 2 * p["loose_dist"] else "warning"
             etype = "disconnected_wire" if sev == "error" else "loose_wire"
             errors.append(_err(etype, sev, rw.get("wire_uid"),
-                               f"wire start not connected (nearest terminal {d:.0f}px)",
-                               round(conf * min(1.0, d / (3 * p["loose_dist"])), 3),
-                               _warp_pt(H, ow["start"])))
-    if ref_connected_end:
-        d = free(ow["end"])
-        if d > p["loose_dist"]:
-            sev = "error" if d > 2 * p["loose_dist"] else "warning"
-            etype = "disconnected_wire" if sev == "error" else "loose_wire"
-            errors.append(_err(etype, sev, rw.get("wire_uid"),
-                               f"wire end not connected (nearest terminal {d:.0f}px)",
-                               round(conf * min(1.0, d / (3 * p["loose_dist"])), 3),
-                               _warp_pt(H, ow["end"])))
+                               f"wire end floats {obs_d:.0f}px from nearest terminal "
+                               f"(reference {baseline:.0f}px)",
+                               round(conf * min(1.0, regression / (3 * p["loose_dist"])), 3),
+                               obs_end))
