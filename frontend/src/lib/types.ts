@@ -29,6 +29,44 @@ export interface EmployeesResponse { employees: Employee[]; total: number; }
 export interface FaceVerdict {
   faces: number; ok: boolean; reason: string | null; blur_score: number | null; min_blur: number;
   bbox: number[] | null; multiple_faces: boolean; camera_id?: string; image?: string; face_preview?: string | null;
+  message?: string | null; quality?: number | null; brightness?: number | null; det_score?: number | null;
+}
+
+// ---- Face recognition (real SCRFD + ArcFace pipeline) ----
+export interface FaceConfig {
+  threshold: number; margin: number; match_policy: "average" | "nearest";
+  min_det_score: number; min_blur: number; min_recog_blur: number;
+  min_face_size: number; enroll_min_face_size: number;
+  index_backend: string; faiss_available: boolean; embedder: string;
+  embedding_dim: number | null; enrolled_vectors: number; enrolled_employees: number;
+}
+export interface FaceConfigResponse {
+  config: FaceConfig; backend: string; backend_state: string;
+  backend_detail: string | null; backend_info: BackendInfo; params: Record<string, any>;
+}
+export interface RecognitionRow {
+  id: number; type: string; camera_id: string | null; camera_name: string | null;
+  label: string | null; confidence: number | null; employee_id: number | null;
+  snapshot: string | null; created_at: number;
+}
+export interface RecognitionsResponse { recognitions: RecognitionRow[]; total: number; }
+export interface EmbeddingRow {
+  id: number; image_id: number | null; embedder: string; dim: number;
+  quality: number | null; meta: Record<string, any> | null; created_at: number;
+}
+export interface EmbeddingsResponse { employee_id: number; embeddings: EmbeddingRow[]; total: number; }
+export interface RetrainResult {
+  employee_id: number; images: number; enrolled: number; embedder: string; results: any[];
+}
+export interface DetectedFace {
+  label: string; confidence: number; bbox: number[]; kind: string;
+  identity: string | null; employee_id: number | null;
+  extra: {
+    similarity?: number; similarity_pct?: number; confidence?: number; margin?: number;
+    status?: string; quality?: number; blur?: number; min_side?: number;
+    brightness?: number; det_score?: number; reason?: string | null; message?: string | null;
+    closest_name?: string | null;
+  };
 }
 
 export interface RegisterResult {
@@ -190,3 +228,59 @@ export type WSMessage =
   | { type: "stats"; camera_id: string; timestamp: number; state: string; healthy: boolean; fps: number; latency: CameraLatency; frame_age_ms: number | null; statistics: CameraStatistics }
   | { type: "ai_event"; event_id: number; event_type: string; camera_id: string; camera_name: string; label: string; confidence: number | null; employee_id: number | null; snapshot: string | null; timestamp: number }
   | { type: string; [k: string]: any };
+
+// ---- Reference Panels (Industrial Inspection) ----
+export interface RefError {
+  error_type: string; severity: "error" | "warning" | "info";
+  target: string | null; detail: string; confidence: number;
+  x?: number; y?: number;
+}
+export interface RefPanel {
+  id: number; name: string; version: string; description: string | null;
+  status: string; n_images: number; n_components: number; n_terminals: number;
+  n_wires: number; thumbnail: string | null; note: string | null;
+  created_at: number; updated_at: number;
+}
+export interface RefPanelsResponse { panels: RefPanel[]; total: number; }
+export interface RefGraph { nodes: any[]; edges: any[]; }
+export interface RefPanelDetail extends RefPanel {
+  template?: any; features?: any;
+  images: any[]; components: any[]; terminals: any[]; wires: any[];
+  graph?: RefGraph;
+}
+export interface RefImageAdd {
+  id: number; panel_id: number; path: string; source: string;
+  width: number; height: number; is_primary: boolean;
+}
+export interface CompareResult {
+  id: number; panel_id: number; status: string; score: number;
+  n_errors: number; n_warnings: number; errors: RefError[];
+  alignment: any; snapshot: string | null; observed: any; result: any;
+}
+export interface InspectionResultRow {
+  id: number; panel_id: number; camera_id: string | null; source: string | null;
+  status: string; score: number; n_errors: number; n_warnings: number;
+  snapshot: string | null; created_at: number;
+}
+export interface InspectionResultsResponse {
+  panel_id: number; results: InspectionResultRow[]; total: number;
+}
+
+// ---- Datasheets (OCR / schematic understanding) ----
+export interface Datasheet {
+  id: number; name: string; kind: string; path: string; panel_id: number | null;
+  description: string | null; ocr_engine: string | null; status: string;
+  created_at: number; updated_at: number;
+}
+export interface DatasheetsResponse { datasheets: Datasheet[]; total: number; }
+export interface DatasheetExtract {
+  id: number; ocr_engine: string; text_chars: number;
+  parsed: {
+    component_ids: string[]; terminal_ids: string[]; wire_ids: string[];
+    connections: { from: string; to: string }[];
+    n_components: number; n_terminals: number; n_connections: number;
+    component_types?: Record<string, string>;
+  };
+  expected_graph: RefGraph & { node_count: number; edge_count: number };
+  note: string | null;
+}

@@ -79,7 +79,7 @@ def test_unknown_when_db_empty(tmp_path, astronaut_bgr):
         assert len(dets) >= 1
         for d in dets:
             assert d.employee_id is None
-            assert d.label == "Unknown Person"
+            assert d.label == "Unknown Employee"
     finally:
         db.close()
 

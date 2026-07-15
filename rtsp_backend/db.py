@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS face_embeddings (
     embedder    TEXT NOT NULL,          -- which embedder produced this vector
     dim         INTEGER NOT NULL,
     vector      BLOB NOT NULL,          -- float32 little-endian
-    created_at  REAL NOT NULL,
+    quality     REAL,                   -- 0..1 capture quality score
+    meta        TEXT,                   -- JSON: blur, brightness, det_score, bbox, ...
+    created_at  REAL NOT NULL,          -- capture date (epoch seconds)
     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
     FOREIGN KEY (image_id)    REFERENCES employee_images(id) ON DELETE CASCADE
 );
@@ -197,12 +199,210 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at REAL NOT NULL
 );
 
+-- =====================================================================
+-- Industrial Panel Inspection (Reference Panel Learning) — normalized
+-- schema. Additive: existing tables above are untouched. A reference
+-- panel is LEARNED from one or more images (captured from RTSP or
+-- uploaded); the learned template + electrical graph are stored here,
+-- and every live/uploaded inspection is compared against it.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS reference_panels (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    version      TEXT NOT NULL DEFAULT 'v1',
+    description  TEXT,
+    status       TEXT NOT NULL DEFAULT 'draft',   -- draft|learning|ready|error
+    template     TEXT,                             -- JSON reusable panel template
+    features     TEXT,                             -- JSON feature embedding / descriptors
+    thumbnail    TEXT,                             -- relative path under data dir
+    n_images     INTEGER NOT NULL DEFAULT 0,
+    n_components INTEGER NOT NULL DEFAULT 0,
+    n_terminals  INTEGER NOT NULL DEFAULT 0,
+    n_wires      INTEGER NOT NULL DEFAULT 0,
+    note         TEXT,
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reference_images (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id    INTEGER NOT NULL,
+    path        TEXT NOT NULL,                     -- relative path under data dir
+    source      TEXT,                              -- camera|upload
+    camera_id   TEXT,
+    width       INTEGER,
+    height      INTEGER,
+    is_primary  INTEGER NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reference_components (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id    INTEGER NOT NULL,
+    ref_id      TEXT,                              -- stable id within the template (e.g. C0)
+    comp_type   TEXT,                              -- mcb|contactor|plc|terminal_block...
+    label       TEXT,
+    x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+    cx REAL, cy REAL, w REAL, h REAL,
+    rotation    REAL,                              -- degrees
+    confidence  REAL,
+    position    TEXT,                              -- coarse grid label
+    payload     TEXT,                              -- JSON extras (terminals etc.)
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reference_terminals (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id     INTEGER NOT NULL,
+    ref_id       TEXT,                             -- stable id (e.g. T0)
+    component_ref TEXT,                            -- owning component ref_id (nullable)
+    label        TEXT,
+    kind         TEXT,                             -- screw|block|entry
+    x REAL, y REAL,
+    created_at   REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reference_wires (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id     INTEGER NOT NULL,
+    wire_uid     TEXT,
+    start_x REAL, start_y REAL, end_x REAL, end_y REAL,
+    polyline     TEXT,                             -- JSON [[x,y],...]
+    length       REAL,
+    thickness    REAL,
+    color        TEXT,
+    direction    REAL,                             -- degrees
+    from_terminal TEXT,                            -- terminal ref_id
+    to_terminal   TEXT,
+    from_component TEXT,                           -- component ref_id
+    to_component   TEXT,
+    payload      TEXT,
+    created_at   REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reference_connections (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id      INTEGER NOT NULL,
+    wire_uid      TEXT,
+    from_node     TEXT,
+    to_node       TEXT,
+    from_terminal TEXT,
+    to_terminal   TEXT,
+    color         TEXT,
+    created_at    REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reference_graph (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id    INTEGER NOT NULL UNIQUE,
+    nodes       TEXT,                              -- JSON list of nodes
+    edges       TEXT,                              -- JSON list of edges
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inspection_results (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id    INTEGER,
+    camera_id   TEXT,
+    source      TEXT,                              -- camera|upload
+    status      TEXT,                              -- pass|warning|fail
+    score       REAL,                              -- 0..1 overall match score
+    n_errors    INTEGER NOT NULL DEFAULT 0,
+    n_warnings  INTEGER NOT NULL DEFAULT 0,
+    result      TEXT,                              -- JSON full comparison result
+    snapshot    TEXT,                              -- annotated overlay image
+    report_path TEXT,
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS inspection_components (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL,
+    comp_type   TEXT,
+    label       TEXT,
+    x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+    confidence  REAL,
+    matched_ref TEXT,                              -- reference component ref_id it matched
+    status      TEXT,                              -- ok|missing|extra|wrong|moved|rotated
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (result_id) REFERENCES inspection_results(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inspection_terminals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL,
+    label       TEXT,
+    kind        TEXT,
+    x REAL, y REAL,
+    matched_ref TEXT,
+    status      TEXT,
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (result_id) REFERENCES inspection_results(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inspection_wires (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL,
+    wire_uid    TEXT,
+    start_x REAL, start_y REAL, end_x REAL, end_y REAL,
+    color       TEXT,
+    length      REAL,
+    thickness   REAL,
+    status      TEXT,                              -- ok|missing|extra|wrong|loose|disconnected|broken
+    matched_ref TEXT,
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (result_id) REFERENCES inspection_results(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inspection_errors (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL,
+    error_type  TEXT NOT NULL,                     -- missing_component|extra_wire|wrong_color...
+    severity    TEXT,                              -- error|warning|info
+    target      TEXT,                              -- what it refers to (ref id / label)
+    detail      TEXT,
+    confidence  REAL,
+    x REAL, y REAL,
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (result_id) REFERENCES inspection_results(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS datasheets (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    kind         TEXT,                             -- pdf|image|dxf|svg|other
+    path         TEXT NOT NULL,                    -- relative path under data dir
+    panel_id     INTEGER,                          -- optional link to a reference panel
+    description  TEXT,
+    ocr_engine   TEXT,                             -- paddleocr|tesseract|none
+    extracted    TEXT,                             -- JSON extraction result
+    expected_graph TEXT,                           -- JSON expected graph built from doc
+    status       TEXT NOT NULL DEFAULT 'uploaded', -- uploaded|processing|extracted|error
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL,
+    FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE SET NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type    ON events(type);
 CREATE INDEX IF NOT EXISTS idx_emb_employee   ON face_embeddings(employee_id);
 CREATE INDEX IF NOT EXISTS idx_att_day        ON attendance(day);
 CREATE INDEX IF NOT EXISTS idx_att_employee   ON attendance(employee_id, day);
 CREATE INDEX IF NOT EXISTS idx_insp_created   ON inspections(created_at);
+CREATE INDEX IF NOT EXISTS idx_refimg_panel   ON reference_images(panel_id);
+CREATE INDEX IF NOT EXISTS idx_refcomp_panel  ON reference_components(panel_id);
+CREATE INDEX IF NOT EXISTS idx_refwire_panel  ON reference_wires(panel_id);
+CREATE INDEX IF NOT EXISTS idx_refterm_panel  ON reference_terminals(panel_id);
+CREATE INDEX IF NOT EXISTS idx_inspres_panel  ON inspection_results(panel_id);
+CREATE INDEX IF NOT EXISTS idx_insperr_result ON inspection_errors(result_id);
 """
 
 
@@ -220,6 +420,19 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys=ON;")
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Additive, idempotent migrations for databases created by an older
+        schema. Only adds missing columns — never drops or rewrites data."""
+        with self._lock:
+            cols = {r["name"] for r in self._conn.execute(
+                "PRAGMA table_info(face_embeddings)").fetchall()}
+            if "quality" not in cols:
+                self._conn.execute("ALTER TABLE face_embeddings ADD COLUMN quality REAL")
+            if "meta" not in cols:
+                self._conn.execute("ALTER TABLE face_embeddings ADD COLUMN meta TEXT")
             self._conn.commit()
 
     # -- low-level ---------------------------------------------------------

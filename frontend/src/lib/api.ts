@@ -9,6 +9,10 @@ import type {
   PanelsResponse, PanelAnalyzeResult,
   InspectionResponse, InspectionRunResult, Inspection,
   ReportsResponse, ReportsSummary,
+  RefPanelsResponse, RefPanelDetail, RefPanel, RefImageAdd, CompareResult,
+  InspectionResultRow, InspectionResultsResponse,
+  DatasheetsResponse, Datasheet, DatasheetExtract,
+  FaceConfig, FaceConfigResponse, RecognitionsResponse, EmbeddingsResponse, RetrainResult,
 } from "./types";
 
 async function parse<T>(res: Response): Promise<T> {
@@ -63,6 +67,9 @@ export const api = {
   captureImage: (id: number, b: { camera_id?: string; make_profile?: boolean }) =>
     req<any>("POST", `/api/employees/${id}/capture`, b),
   deleteImage: (id: number, imgId: number) => req<any>("DELETE", `/api/employees/${id}/images/${imgId}`),
+  employeeEmbeddings: (id: number) => req<EmbeddingsResponse>("GET", `/api/employees/${id}/embeddings`),
+  deleteEmbedding: (id: number, embId: number) => req<any>("DELETE", `/api/employees/${id}/embeddings/${embId}`),
+  retrainEmployee: (id: number) => req<RetrainResult>("POST", `/api/employees/${id}/retrain`),
 
   events: (q = "") => req<EventsResponse>("GET", `/api/events${q}`),
   eventTypes: () => req<{ types: EventType[] }>("GET", "/api/events/types"),
@@ -75,6 +82,12 @@ export const api = {
   setModelParams: (task: string, params: Record<string, any>) => req<TaskStatus>("POST", `/api/ai/models/${task}/params`, { params }),
   getSettings: () => req<Record<string, any>>("GET", "/api/ai/settings"),
   setSetting: (key: string, value: any) => req<any>("PUT", `/api/ai/settings/${encodeURIComponent(key)}`, { value }),
+
+  // ---- Face recognition config + insight ----
+  faceConfig: () => req<FaceConfigResponse>("GET", "/api/ai/face/config"),
+  setFaceConfig: (b: Partial<FaceConfig>) => req<{ ok: boolean; config: FaceConfig }>("PUT", "/api/ai/face/config", b),
+  faceMessages: () => req<{ messages: Record<string, string> }>("GET", "/api/ai/face/messages"),
+  faceRecognitions: (limit = 50) => req<RecognitionsResponse>("GET", `/api/ai/face/recognitions?limit=${limit}`),
 
   analyze: (camId: string) => req<any>("GET", `/api/cameras/${camId}/analyze`),
 
@@ -120,6 +133,34 @@ export const api = {
   inspections: () => req<InspectionResponse>("GET", "/api/inspection"),
   inspection: (id: number) => req<Inspection>("GET", `/api/inspection/${id}`),
   runInspection: (form: FormData) => upload<InspectionRunResult>("/api/inspection/run", form),
+
+  // ---- Reference Panels (industrial inspection) ----
+  refPanels: () => req<RefPanelsResponse>("GET", "/api/reference-panels"),
+  refPanel: (id: number) => req<RefPanelDetail>("GET", `/api/reference-panels/${id}`),
+  createRefPanel: (b: { name: string; version?: string; description?: string }) =>
+    req<RefPanel>("POST", "/api/reference-panels", b),
+  deleteRefPanel: (id: number) => req<{ deleted: number }>("DELETE", `/api/reference-panels/${id}`),
+  captureRefPanel: (id: number, cameraId?: string) => {
+    const form = new FormData();
+    if (cameraId) form.append("camera_id", cameraId);
+    return upload<RefImageAdd>(`/api/reference-panels/${id}/capture`, form);
+  },
+  uploadRefPanel: (id: number, form: FormData) =>
+    upload<{ panel_id: number; added: RefImageAdd[]; count: number }>(`/api/reference-panels/${id}/upload`, form),
+  learnRefPanel: (id: number) => req<RefPanelDetail>("POST", `/api/reference-panels/${id}/learn`),
+  compareRefPanel: (id: number, form: FormData) =>
+    upload<CompareResult>(`/api/reference-panels/${id}/compare`, form),
+  refPanelResult: (id: number, resultId?: number) =>
+    req<any>("GET", `/api/reference-panels/${id}/result${resultId ? `?result_id=${resultId}` : ""}`),
+  refPanelResults: (id: number) =>
+    req<InspectionResultsResponse>("GET", `/api/reference-panels/${id}/results`),
+
+  // ---- Datasheets (OCR) ----
+  datasheets: () => req<DatasheetsResponse>("GET", "/api/datasheets"),
+  datasheet: (id: number) => req<Datasheet>("GET", `/api/datasheets/${id}`),
+  uploadDatasheet: (form: FormData) => upload<Datasheet>("/api/datasheets/upload", form),
+  extractDatasheet: (id: number) => req<DatasheetExtract>("POST", `/api/datasheets/${id}/extract`),
+  deleteDatasheet: (id: number) => req<{ deleted: number }>("DELETE", `/api/datasheets/${id}`),
 
   // ---- Reports ----
   reports: (kind = "") => req<ReportsResponse>("GET", `/api/reports${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),

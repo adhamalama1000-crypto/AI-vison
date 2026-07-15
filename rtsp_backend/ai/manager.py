@@ -12,6 +12,7 @@ concrete backend is active behind the interfaces in :mod:`.base`.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
@@ -39,13 +40,23 @@ TASKS = (
     "fire", "violence", "fall", "weapon", "ppe", "human", "vehicle",
 )
 
+# The real face pipeline (SCRFD + ArcFace via InsightFace) is the default. It
+# can be overridden with RTSP_FACE_BACKEND (e.g. "opencv_fallback") — used by the
+# test suite to stay hermetic and avoid a model download.
+_FACE_BACKEND = os.environ.get("RTSP_FACE_BACKEND", "insightface_arcface")
+
 DEFAULTS = {
     "detection": ("onnx_yolo", {"conf": 0.25, "iou": 0.45, "device": "cpu"}),
-    "face": ("opencv_fallback", {"threshold": 0.5, "min_blur": 40.0,
-                                  "min_face_size": 24, "min_recog_blur": 12.0,
-                                  "topk_vote": 3, "device": "cpu"}),
+    "face": (_FACE_BACKEND, {
+        # anti-FAR tuned defaults for ArcFace cosine similarity
+        "threshold": 0.65, "margin": 0.05, "match_policy": "average",
+        "min_det_score": 0.5, "model_pack": "buffalo_l", "det_size": 640,
+        "min_blur": 45.0, "min_recog_blur": 25.0,
+        "min_face_size": 50, "enroll_min_face_size": 80,
+        "topk_vote": 5, "device": "cpu",
+    }),
     "components": ("onnx_components", {"conf": 0.25, "iou": 0.45, "device": "cpu"}),
-    "wires": ("classical_wires", {"min_wire_len": 40, "device": "cpu"}),
+    "wires": ("advanced_wires", {"min_wire_len": 35, "device": "cpu"}),
     "fire": ("onnx_fire", {"conf": 0.35, "iou": 0.45, "device": "cpu"}),
     "violence": ("onnx_violence", {"conf": 0.5, "iou": 0.45, "device": "cpu"}),
     "fall": ("onnx_fall", {"conf": 0.4, "iou": 0.45, "device": "cpu"}),
@@ -142,22 +153,31 @@ class AIModelManager:
         st.backend_id = backend_id
         st.params = params
         if task == "face":
-            threshold = float(params.get("threshold", 0.5))
-            min_blur = float(params.get("min_blur", 40.0))
             fkw = dict(
-                min_face_size=int(params.get("min_face_size", 24)),
-                min_recog_blur=float(params.get("min_recog_blur", 12.0)),
-                topk_vote=int(params.get("topk_vote", 3)),
+                threshold=float(params.get("threshold", 0.65)),
+                margin=float(params.get("margin", 0.05)),
+                match_policy=str(params.get("match_policy", "average")),
+                min_det_score=float(params.get("min_det_score", 0.5)),
+                min_blur=float(params.get("min_blur", 45.0)),
+                min_recog_blur=float(params.get("min_recog_blur", 25.0)),
+                min_face_size=int(params.get("min_face_size", 50)),
+                enroll_min_face_size=int(params.get("enroll_min_face_size", 80)),
+                topk_vote=int(params.get("topk_vote", 5)),
             )
             if self.face_service is None:
-                self.face_service = FaceRecognitionService(
-                    self.db, backend, threshold, min_blur=min_blur, **fkw)
+                self.face_service = FaceRecognitionService(self.db, backend, **fkw)
             else:
                 self.face_service.embedder = backend
-                self.face_service.threshold = threshold
-                self.face_service.min_blur = min_blur
-                self.face_service.min_face_size = fkw["min_face_size"]
+                self.face_service.threshold = fkw["threshold"]
+                self.face_service.margin = fkw["margin"]
+                self.face_service.match_policy = (
+                    fkw["match_policy"] if fkw["match_policy"] in ("average", "nearest")
+                    else "average")
+                self.face_service.min_det_score = fkw["min_det_score"]
+                self.face_service.min_blur = fkw["min_blur"]
                 self.face_service.min_recog_blur = fkw["min_recog_blur"]
+                self.face_service.min_face_size = fkw["min_face_size"]
+                self.face_service.enroll_min_face_size = fkw["enroll_min_face_size"]
                 self.face_service.topk_vote = fkw["topk_vote"]
                 self.face_service.reload_cache()
 
@@ -260,7 +280,8 @@ class AIModelManager:
         if not s.get("ready"):
             if reason == "weights_missing":
                 return "not_loaded"
-            if reason in ("onnxruntime_missing", "insightface_missing", "init_failed"):
+            if reason in ("onnxruntime_missing", "insightface_missing",
+                          "init_failed", "weights_unavailable"):
                 return "error"
             if s.get("status") == "error" or s.get("error"):
                 return "error"
