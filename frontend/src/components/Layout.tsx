@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Video, Users, Bell, Cpu, Settings as SettingsIcon,
   Sun, Moon, Menu, X, ScanFace, Activity, Zap, Waypoints,
   Database, GitCompare, FileText, ScanLine, Layers, ClipboardCheck,
-  GaugeCircle, CalendarCheck,
+  GaugeCircle, CalendarCheck, CircuitBoard, ScanText,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { useEventSocket } from "../hooks/useEventSocket";
@@ -22,6 +22,11 @@ const NAV = [
     { to: "/employees", label: "Employees", icon: Users },
     { to: "/attendance", label: "Attendance", icon: CalendarCheck },
     { to: "/events", label: "Events", icon: Bell },
+  ]},
+  { section: "Industrial Inspection", items: [
+    { to: "/reference-panels", label: "Reference Panels", icon: CircuitBoard },
+    { to: "/topology", label: "Topology Viewer", icon: Waypoints },
+    { to: "/datasheets", label: "Datasheets", icon: ScanText },
   ]},
   { section: "Electrical AI", items: [
     { to: "/datasets", label: "Electrical Dataset", icon: Database },
@@ -142,6 +147,9 @@ function titleForPath(p: string): { label: string; sub: string } {
     if (/\/training\/[^/]+$/.test(p)) return { label: "Training Progress", sub: "Live training metrics & controls" };
     return { label: "Training", sub: "Configure, launch & monitor training jobs" };
   }
+  if (p.startsWith("/reference-panels")) return { label: "Reference Panels", sub: "Learn a correct panel, then inspect against it" };
+  if (p.startsWith("/topology")) return { label: "Topology Viewer", sub: "Component / terminal / wire electrical graph" };
+  if (p.startsWith("/datasheets")) return { label: "Datasheets", sub: "OCR schematics into an expected wiring graph" };
   if (p.startsWith("/reference")) return { label: "Reference Design", sub: "Reference designs & expected specifications" };
   if (p.startsWith("/panel")) return { label: "Panel Analysis", sub: "Component & wiring analysis of control panels" };
   if (p.startsWith("/inspection")) return { label: "Inspection", sub: "Compare panels against reference designs" };

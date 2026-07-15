@@ -190,3 +190,59 @@ export type WSMessage =
   | { type: "stats"; camera_id: string; timestamp: number; state: string; healthy: boolean; fps: number; latency: CameraLatency; frame_age_ms: number | null; statistics: CameraStatistics }
   | { type: "ai_event"; event_id: number; event_type: string; camera_id: string; camera_name: string; label: string; confidence: number | null; employee_id: number | null; snapshot: string | null; timestamp: number }
   | { type: string; [k: string]: any };
+
+// ---- Reference Panels (Industrial Inspection) ----
+export interface RefError {
+  error_type: string; severity: "error" | "warning" | "info";
+  target: string | null; detail: string; confidence: number;
+  x?: number; y?: number;
+}
+export interface RefPanel {
+  id: number; name: string; version: string; description: string | null;
+  status: string; n_images: number; n_components: number; n_terminals: number;
+  n_wires: number; thumbnail: string | null; note: string | null;
+  created_at: number; updated_at: number;
+}
+export interface RefPanelsResponse { panels: RefPanel[]; total: number; }
+export interface RefGraph { nodes: any[]; edges: any[]; }
+export interface RefPanelDetail extends RefPanel {
+  template?: any; features?: any;
+  images: any[]; components: any[]; terminals: any[]; wires: any[];
+  graph?: RefGraph;
+}
+export interface RefImageAdd {
+  id: number; panel_id: number; path: string; source: string;
+  width: number; height: number; is_primary: boolean;
+}
+export interface CompareResult {
+  id: number; panel_id: number; status: string; score: number;
+  n_errors: number; n_warnings: number; errors: RefError[];
+  alignment: any; snapshot: string | null; observed: any; result: any;
+}
+export interface InspectionResultRow {
+  id: number; panel_id: number; camera_id: string | null; source: string | null;
+  status: string; score: number; n_errors: number; n_warnings: number;
+  snapshot: string | null; created_at: number;
+}
+export interface InspectionResultsResponse {
+  panel_id: number; results: InspectionResultRow[]; total: number;
+}
+
+// ---- Datasheets (OCR / schematic understanding) ----
+export interface Datasheet {
+  id: number; name: string; kind: string; path: string; panel_id: number | null;
+  description: string | null; ocr_engine: string | null; status: string;
+  created_at: number; updated_at: number;
+}
+export interface DatasheetsResponse { datasheets: Datasheet[]; total: number; }
+export interface DatasheetExtract {
+  id: number; ocr_engine: string; text_chars: number;
+  parsed: {
+    component_ids: string[]; terminal_ids: string[]; wire_ids: string[];
+    connections: { from: string; to: string }[];
+    n_components: number; n_terminals: number; n_connections: number;
+    component_types?: Record<string, string>;
+  };
+  expected_graph: RefGraph & { node_count: number; edge_count: number };
+  note: string | null;
+}
