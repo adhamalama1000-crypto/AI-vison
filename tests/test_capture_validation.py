@@ -53,7 +53,7 @@ def test_validate_rejects_blurry_face(camera_client, astronaut_bgr):
     assert v["blur_score"] < v["min_blur"]
 
 
-def test_validate_warns_multiple_faces(camera_client, astronaut_bgr):
+def test_validate_rejects_multiple_faces(camera_client, astronaut_bgr):
     client, cam_id, cam = camera_client
     _enable_face(client)
     two = np.hstack([astronaut_bgr, astronaut_bgr])  # two copies -> two faces
@@ -61,9 +61,9 @@ def test_validate_warns_multiple_faces(camera_client, astronaut_bgr):
     v = client.post("/api/employees/validate", json={"camera_id": cam_id}).json()
     if v["faces"] >= 2:
         assert v["multiple_faces"] is True
-        # still enrollable (largest face used), surfaced as a warning
-        assert v["ok"] is True
-        assert v["reason"] == "multiple_faces_warning"
+        # enrolment must capture exactly one person -> hard reject (anti-FAR)
+        assert v["ok"] is False
+        assert v["reason"] == "multiple_faces"
     else:
         # detector environment-dependent; at minimum the flag is coherent
         assert v["multiple_faces"] is (v["faces"] > 1)

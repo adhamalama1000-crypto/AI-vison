@@ -65,7 +65,7 @@ def test_unknown_face_auto_logged(camera_client, astronaut_bgr):
 
     events = _poll_events(client, "unknown_person")
     assert events, "no unknown_person event logged"
-    assert events[0]["label"] == "Unknown Person"
+    assert events[0]["label"] == "Unknown Employee"
     total = client.get("/api/events?type=unknown_person").json()["total"]
     assert total <= 3
 

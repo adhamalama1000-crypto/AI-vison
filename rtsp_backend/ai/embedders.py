@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 
 from .base import BBox, FaceEmbedder
+from .model_provision import DEFAULT_PACK, ensure_model_pack
 from .registry import register
 
 log = logging.getLogger("rtsp_backend.ai")
@@ -178,10 +179,39 @@ class OpenCVFallbackEmbedder(FaceEmbedder):
 
 @register
 class InsightFaceEmbedder(FaceEmbedder):
+    """Real production face pipeline: SCRFD detection + ArcFace recognition.
+
+    The InsightFace ``buffalo_l`` pack runs SCRFD for detection and an ArcFace
+    R50 recognition head that produces 512-dimensional embeddings; matching is
+    cosine similarity of these L2-normalised vectors. Model weights are
+    provisioned and **SHA-256 verified** by :mod:`.model_provision` (so a
+    corrupted or substituted weight is rejected), then loaded with
+    ``allowed_modules=["detection", "recognition"]`` — no landmark/gender models
+    are loaded or downloaded. If the verified weights cannot be obtained the
+    backend reports a precise error and stays unready; it NEVER silently falls
+    back to a weaker descriptor.
+    """
+
     backend_id = "insightface_arcface"
-    display_name = "InsightFace ArcFace (real embeddings, needs models)"
+    display_name = "InsightFace SCRFD + ArcFace (512-d, real recognition)"
     requires_weights = True
     dim = 512
+
+    def _pack(self) -> str:
+        return str(self.params.get("model_pack", DEFAULT_PACK))
+
+    def _root(self) -> str:
+        """InsightFace root holding ``models/<pack>/*.onnx`` (kept out of git).
+
+        ``RTSP_FACE_MODEL_ROOT`` overrides the location so several instances (or
+        the test suite) can share one provisioned/verified weight cache instead
+        of each downloading its own copy.
+        """
+        env_root = os.environ.get("RTSP_FACE_MODEL_ROOT")
+        if env_root:
+            return env_root
+        models_dir = self.params.get("models_dir", "models")
+        return os.path.join(models_dir, "insightface")
 
     def load(self) -> None:
         try:
@@ -194,30 +224,42 @@ class InsightFaceEmbedder(FaceEmbedder):
             raise RuntimeError(self._error)
         try:
             from insightface.app import FaceAnalysis  # type: ignore
-        except Exception:  # library not installed — auto-install (Part 1)
-            # Auto-install mutates the host Python env, so it is OFF unless
-            # explicitly enabled (RTSP_ALLOW_AUTO_INSTALL=1 or an auto_install
-            # param) — a public model-select must not trigger a pip install.
+        except Exception:  # library not installed — optional auto-install
             allow = (str(os.environ.get("RTSP_ALLOW_AUTO_INSTALL", "")).lower()
                      in ("1", "true", "yes", "on")) or bool(self.params.get("auto_install"))
             if allow and _try_install_insightface():
                 from insightface.app import FaceAnalysis  # type: ignore
             else:
                 self._ready = False
-                self._status = "unavailable"
+                self._status = "error"
                 self._reason = "insightface_missing"
-                self._error = ("InsightFace is not installed and automatic "
-                               "installation failed (offline?). Run "
-                               "`pip install insightface`.")
+                self._error = ("InsightFace is not installed. Install it with "
+                               "`pip install insightface` (and onnxruntime).")
                 raise RuntimeError(self._error)
+
+        pack = self._pack()
+        root = self._root()
+        # Provision + verify the real SCRFD/ArcFace ONNX weights. This works in
+        # locked-down networks (mirrors) and normal deployments alike; every
+        # file is SHA-256 checked before use.
+        prov = ensure_model_pack(pack, root)
+        self._provision = prov
+        if not prov.get("ok"):
+            # InsightFace can still self-download from its official release in
+            # environments with GitHub access — let it try before giving up.
+            log.warning("model provisioning incomplete for %s: %s",
+                        pack, prov.get("error"))
+
         try:
             ctx_id = int(self.params.get("ctx_id", -1))  # -1 = CPU
             det = int(self.params.get("det_size", 640))
+            self._det_thresh = float(self.params.get("det_thresh", 0.5))
             app = FaceAnalysis(
-                name=self.params.get("model_pack", "buffalo_l"),
-                allowed_modules=["detection", "recognition"])
+                name=pack, root=root,
+                allowed_modules=["detection", "recognition"],
+                providers=["CPUExecutionProvider"])
             app.prepare(ctx_id=ctx_id, det_size=(det, det),
-                        det_thresh=float(self.params.get("det_thresh", 0.5)))
+                        det_thresh=self._det_thresh)
             self._app = app
             self._cache_key = None
             self._cache_faces: list = []
@@ -225,12 +267,21 @@ class InsightFaceEmbedder(FaceEmbedder):
             self._status = "ready"
             self._error = None
             self._reason = None
-        except Exception as exc:  # models missing / download blocked
+        except Exception as exc:  # weights missing / download blocked
             self._ready = False
             self._status = "error"
-            self._reason = "init_failed"
-            self._error = f"InsightFace model initialisation failed (weights unavailable?): {exc}"
+            self._reason = "weights_unavailable"
+            detail = prov.get("error") or ""
+            self._error = (
+                "InsightFace could not load the SCRFD/ArcFace weights for "
+                f"'{pack}'. Provisioning: {detail or 'ok'}. Loader error: {exc}")
             raise RuntimeError(self._error)
+
+    def status(self) -> dict:
+        s = super().status()
+        s["model_pack"] = self._pack()
+        s["provision"] = getattr(self, "_provision", None)
+        return s
 
     def _faces(self, frame: np.ndarray) -> list:
         """Run detection+recognition once per frame and cache, so detect_faces
@@ -251,6 +302,12 @@ class InsightFaceEmbedder(FaceEmbedder):
             out.append(BBox(float(b[0]), float(b[1]), float(b[2]), float(b[3])))
         return out
 
+    @staticmethod
+    def _normed(face) -> Optional[np.ndarray]:
+        emb = np.asarray(face.normed_embedding, dtype=np.float32)
+        norm = float(np.linalg.norm(emb))
+        return emb / norm if norm else None
+
     def embed(self, frame: np.ndarray, box: BBox) -> Optional[np.ndarray]:
         if not self._ready:
             self.load()
@@ -264,6 +321,14 @@ class InsightFaceEmbedder(FaceEmbedder):
             key=lambda f: (float((f.bbox[0] + f.bbox[2]) / 2) - cx) ** 2
             + (float((f.bbox[1] + f.bbox[3]) / 2) - cy) ** 2,
         )
-        emb = np.asarray(best.normed_embedding, dtype=np.float32)
-        norm = np.linalg.norm(emb)
-        return emb / norm if norm else None
+        return self._normed(best)
+
+    def detect_and_embed(self, frame: np.ndarray):
+        if not self._ready:
+            self.load()
+        out = []
+        for f in self._faces(frame):
+            b = f.bbox.astype(float)
+            bbox = BBox(float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+            out.append((bbox, float(f.det_score), self._normed(f)))
+        return out

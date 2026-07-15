@@ -1,7 +1,19 @@
-# Real ArcFace face recognition (Part 1). The backend auto-installs this on
-# demand when the InsightFace embedder is selected; listed here for explicit
-# installs. NOTE: pip pulls opencv-python as a dep, which clobbers
-# opencv-python-headless — reinstall headless afterwards (the auto-installer
-# does this for you):
+# Real face recognition stack: SCRFD detection + ArcFace 512-d embeddings.
+#
+# InsightFace provides the SCRFD + ArcFace ONNX model packs (buffalo_l /
+# buffalo_s). The model weights are provisioned and SHA-256 verified at runtime
+# by rtsp_backend.ai.model_provision (works behind restricted networks via
+# mirrors; also uses InsightFace's own downloader where GitHub is reachable).
+#
+# NOTE: pip pulls opencv-python as a transitive dep of insightface, which
+# clobbers opencv-python-headless. Reinstall headless afterwards:
 #   pip install insightface && pip install --force-reinstall "opencv-python-headless>=4.9,<5"
 insightface>=0.7
+onnxruntime>=1.17
+
+# Optimised similarity search over enrolled embeddings (optional but
+# recommended). Without it the service falls back to a vectorised NumPy matmul.
+faiss-cpu>=1.7
+
+# Evaluation metrics (ROC / AUC / EER / confusion matrix / precision-recall-F1).
+scikit-learn>=1.3

@@ -60,6 +60,48 @@ def _draw_box(img, box, label, color, conf=None):
                 (255, 255, 255), 1, cv2.LINE_AA)
 
 
+def _draw_face(img, box, det: dict) -> None:
+    """Draw a face box with name, similarity % and status.
+
+    Green box for a recognised employee, red for Unknown Employee. Shows the
+    name (or "Unknown Employee"), the cosine similarity as a percentage, and a
+    short status/quality note so an operator can read the decision at a glance.
+    """
+    x1, y1, x2, y2 = [int(v) for v in box.as_list()]
+    extra = det.get("extra", {}) or {}
+    known = det.get("employee_id") is not None
+    color = _COLORS["face_known"] if known else _COLORS["face_unknown"]
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+
+    name = det.get("label", "Unknown Employee")
+    sim = extra.get("similarity_pct")
+    top = f"{name}  {sim:.0f}%" if isinstance(sim, (int, float)) else name
+
+    # secondary line: confidence for a match, or the quality reason for a reject
+    if known:
+        conf = extra.get("confidence")
+        bottom = f"Employee · conf {conf:.0%}" if isinstance(conf, (int, float)) else "Employee"
+    else:
+        msg = extra.get("message")
+        bottom = msg if msg else "Unknown Employee"
+
+    _label_bar(img, x1, y1, top, color, above=True)
+    _label_bar(img, x1, y2, bottom, color, above=False)
+
+
+def _label_bar(img, x, y, text, color, above=True) -> None:
+    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+    if above:
+        y0, y1 = y - th - 6, y
+        ty = y - 4
+    else:
+        y0, y1 = y, y + th + 6
+        ty = y + th + 2
+    cv2.rectangle(img, (x, y0), (x + tw + 6, y1), color, -1)
+    cv2.putText(img, text, (x + 3, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (255, 255, 255), 1, cv2.LINE_AA)
+
+
 class AIPipeline:
     def __init__(self, db, ai_manager, event_sink=None, data_dir: str = "data",
                  min_interval: float = 0.2) -> None:
@@ -236,12 +278,11 @@ class AIPipeline:
                 result["face_error"] = str(exc)
             self.ai.record_infer("face", (time.monotonic() - t0) * 1000)
             for f in faces:
-                result["faces"].append(f.to_dict())
+                fd = f.to_dict()
+                result["faces"].append(fd)
                 known = f.employee_id is not None
                 if annotated is not None:
-                    _draw_box(annotated, f.bbox, f.label,
-                              _COLORS["face_known"] if known else _COLORS["face_unknown"],
-                              f.confidence)
+                    _draw_face(annotated, f.bbox, fd)
                 if known:
                     self._log_event("face_recognized", camera_id, camera_name,
                                     f.label, f.confidence, employee_id=f.employee_id,
@@ -254,7 +295,7 @@ class AIPipeline:
                     if self._dedup_ok(f"unknown:{camera_id}"):
                         snap = self._save_snapshot(frame, "unknown")
                         self._log_event("unknown_person", camera_id, camera_name,
-                                        "Unknown Person", f.confidence, snapshot=snap)
+                                        "Unknown Employee", f.confidence, snapshot=snap)
 
         # --- generic object detection ---
         if self.ai.is_enabled("detection"):
@@ -450,9 +491,9 @@ class AIPipeline:
         if not res:
             return img
         for f in res.get("faces", []):
-            known = f.get("employee_id") is not None
-            self._draw_dict_box(
-                img, f, _COLORS["face_known"] if known else _COLORS["face_unknown"])
+            box = f.get("bbox")
+            if box and len(box) == 4:
+                _draw_face(img, BBox(*box), f)
         for o in res.get("objects", []):
             self._draw_dict_box(img, o, _COLORS["object"])
         for c in res.get("components", []):
