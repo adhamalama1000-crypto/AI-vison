@@ -45,7 +45,7 @@ DEFAULTS = {
                                   "min_face_size": 24, "min_recog_blur": 12.0,
                                   "topk_vote": 3, "device": "cpu"}),
     "components": ("onnx_components", {"conf": 0.25, "iou": 0.45, "device": "cpu"}),
-    "wires": ("classical_wires", {"min_wire_len": 40, "device": "cpu"}),
+    "wires": ("advanced_wires", {"min_wire_len": 35, "device": "cpu"}),
     "fire": ("onnx_fire", {"conf": 0.35, "iou": 0.45, "device": "cpu"}),
     "violence": ("onnx_violence", {"conf": 0.5, "iou": 0.45, "device": "cpu"}),
     "fall": ("onnx_fall", {"conf": 0.4, "iou": 0.45, "device": "cpu"}),

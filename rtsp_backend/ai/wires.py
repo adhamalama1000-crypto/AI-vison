@@ -127,6 +127,77 @@ class ClassicalWireAnalyzer(WireAnalyzer):
 
 
 @register
+class AdvancedWireAnalyzer(WireAnalyzer):
+    """Real classical wire instance detector (Feature 4).
+
+    Wraps :class:`rtsp_backend.panels.wire_detector.WireDetector` — HSV/LAB
+    colour segmentation, adaptive threshold, morphology, skeletonisation,
+    connected components, contour filtering, polyline extraction, Hough
+    transform, endpoint detection and broken-segment merging — and adapts its
+    rich :class:`WireInstance` output to the platform's :class:`Wire` model so
+    the live pipeline, overlays and API all benefit with no other changes.
+
+    It returns genuine per-instance geometry (start/end/polyline/length/
+    thickness/colour/direction). Fault *status* stays ``unknown`` on the live
+    path — a fault can only be asserted against a learned reference panel, which
+    the inspection engine does; a bare live detection never fabricates a verdict.
+    """
+
+    backend_id = "advanced_wires"
+    task = "wires"
+    display_name = "Advanced classical wire detector (real geometry, no weights)"
+    requires_weights = False
+
+    def load(self) -> None:
+        # build the detector once, forwarding any tuning params
+        from ..panels.wire_detector import WireDetector
+        allowed = set(WireDetector.DEFAULTS.keys())
+        kw = {k: v for k, v in self.params.items() if k in allowed}
+        self._detector = WireDetector(**kw)
+        self._ready = True
+        self._status = "ready"
+        self._error = None
+
+    def analyze(self, frame: np.ndarray, components: list[Detection]) -> list[Wire]:
+        if not self._ready:
+            self.load()
+        # index components so we can report integer node ids (compatible with
+        # the existing Wire model + wires table).
+        centers = []
+        for idx, comp in enumerate(components or []):
+            cx, cy = comp.bbox.center
+            centers.append((idx, cx, cy))
+
+        def nearest(pt, max_d=60.0):
+            best, bd = None, max_d
+            for idx, cx, cy in centers:
+                d = ((cx - pt[0]) ** 2 + (cy - pt[1]) ** 2) ** 0.5
+                if d < bd:
+                    bd, best = d, idx
+            return best
+
+        instances = self._detector.detect(frame, components=None, terminals=None)
+        wires: list[Wire] = []
+        for inst in instances:
+            wires.append(Wire(
+                wire_uid=inst.wire_uid,
+                start=inst.start, end=inst.end,
+                color=inst.color,
+                status="unknown",  # honest: no reference => no fault verdict
+                from_component=nearest(inst.start),
+                to_component=nearest(inst.end),
+                extra={
+                    "length": round(inst.length, 1),
+                    "thickness": round(inst.thickness, 2),
+                    "direction": round(inst.direction, 1),
+                    "polyline": [[round(x, 1), round(y, 1)] for x, y in inst.polyline],
+                    "confidence": round(inst.confidence, 3),
+                },
+            ))
+        return wires
+
+
+@register
 class NullWireAnalyzer(WireAnalyzer):
     backend_id = "null_wires"
     task = "wires"
