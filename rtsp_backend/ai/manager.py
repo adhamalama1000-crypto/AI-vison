@@ -40,10 +40,32 @@ TASKS = (
     "fire", "violence", "fall", "weapon", "ppe", "human", "vehicle",
 )
 
-# The real face pipeline (SCRFD + ArcFace via InsightFace) is the default. It
-# can be overridden with RTSP_FACE_BACKEND (e.g. "opencv_fallback") — used by the
-# test suite to stay hermetic and avoid a model download.
-_FACE_BACKEND = os.environ.get("RTSP_FACE_BACKEND", "insightface_arcface")
+# Face backend selection.
+#
+# The real pipeline (SCRFD + ArcFace via InsightFace) is preferred *when it is
+# actually installed*. If InsightFace is not importable we fall back to the
+# weights-free OpenCV backend so face recognition + enrolment keep working out
+# of the box — never silently disabled. An explicit RTSP_FACE_BACKEND overrides
+# the auto-detection (the test suite uses "opencv_fallback" to stay hermetic).
+_FACE_FALLBACK = "opencv_fallback"
+
+
+def _insightface_available() -> bool:
+    try:
+        import insightface  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_face_backend() -> str:
+    override = os.environ.get("RTSP_FACE_BACKEND")
+    if override:
+        return override
+    return "insightface_arcface" if _insightface_available() else _FACE_FALLBACK
+
+
+_FACE_BACKEND = _resolve_face_backend()
 
 DEFAULTS = {
     "detection": ("onnx_yolo", {"conf": 0.25, "iou": 0.45, "device": "cpu"}),
@@ -130,6 +152,35 @@ class AIModelManager:
                 self._try_load(task)
             except Exception as exc:  # keep booting even if one backend is broken
                 self._tasks[task].last_error = str(exc)
+            # Face must never be left dead: if the selected face backend could
+            # not load (e.g. a persisted "insightface_arcface" on a host without
+            # InsightFace), fall back to the weights-free OpenCV backend so
+            # recognition + enrolment keep working — the exact behaviour the
+            # platform had before the InsightFace upgrade.
+            if task == "face":
+                self._ensure_face_usable()
+
+    def _ensure_face_usable(self) -> None:
+        st = self._tasks.get("face")
+        if st is None or os.environ.get("RTSP_FACE_BACKEND"):
+            return  # explicit override: respect it, don't second-guess
+        backend = st.backend
+        if backend is not None and backend.ready:
+            return
+        if st.backend_id == _FACE_FALLBACK:
+            return  # already on the fallback; nothing better to do
+        # Re-instantiate the OpenCV fallback with the same tunables.
+        params = {k: v for k, v in (st.params or {}).items() if k != "models_dir"}
+        try:
+            self._instantiate("face", _FACE_FALLBACK, params)
+            self._try_load("face")
+            self._persist("face", _FACE_FALLBACK, st.enabled, params)
+            st.last_error = (
+                f"'{backend.backend_id if backend else 'insightface_arcface'}' "
+                f"unavailable ({(backend._error if backend else None) or 'not loadable'}); "
+                f"fell back to '{_FACE_FALLBACK}'.")
+        except Exception as exc:
+            st.last_error = f"face fallback failed: {exc}"
 
     def _persist(self, task: str, backend_id: str, enabled: bool, params: dict) -> None:
         import json

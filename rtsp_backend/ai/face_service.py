@@ -51,6 +51,7 @@ QUALITY_MESSAGES: dict[str, str] = {
     "bad_lighting": "Bad lighting",
     "low_detection_confidence": "Face not clear enough",
     "embedding_failed": "Could not read face features",
+    "model_unavailable": "Face model not available",
 }
 
 
@@ -189,6 +190,18 @@ class FaceRecognitionService:
             "enrolled_employees": self.enrolled_employees,
         }
 
+    def _ensure_embedder(self) -> Optional[str]:
+        """Load the embedder if needed. Returns ``None`` on success, or a
+        machine-readable reason string if the model could not be loaded — never
+        raises, so callers degrade gracefully instead of throwing a 500."""
+        if getattr(self.embedder, "ready", False):
+            return None
+        try:
+            self.embedder.load()
+            return None if self.embedder.ready else "model_unavailable"
+        except Exception:
+            return "model_unavailable"
+
     # -- quality -----------------------------------------------------------
 
     def _crop(self, frame: np.ndarray, box: BBox):
@@ -244,8 +257,13 @@ class FaceRecognitionService:
 
     def validate_frame(self, image_bgr: np.ndarray) -> dict:
         """Inspect an image for enrolment suitability without storing anything."""
-        if not self.embedder.ready:
-            self.embedder.load()
+        reason = self._ensure_embedder()
+        if reason:
+            return {"faces": 0, "ok": False, "reason": reason,
+                    "message": QUALITY_MESSAGES.get(reason, reason),
+                    "blur_score": None, "quality": None, "brightness": None,
+                    "det_score": None, "min_blur": self.min_blur, "bbox": None,
+                    "multiple_faces": False}
         faces = self.embedder.detect_and_embed(image_bgr)
         result = {
             "faces": len(faces), "ok": False, "reason": None,
@@ -294,8 +312,6 @@ class FaceRecognitionService:
             return {"ok": False, "reason": verdict["reason"],
                     "message": verdict.get("message"),
                     "faces": verdict["faces"], "blur_score": verdict["blur_score"]}
-        if not self.embedder.ready:
-            self.embedder.load()
         faces = self.embedder.detect_and_embed(image_bgr)
         if not faces:
             return {"ok": False, "reason": "no_face_detected",
@@ -331,8 +347,11 @@ class FaceRecognitionService:
         import os
         imgs = self.db.query(
             "SELECT id, path FROM employee_images WHERE employee_id=?", (employee_id,))
-        if not self.embedder.ready:
-            self.embedder.load()
+        reason = self._ensure_embedder()
+        if reason:
+            return {"employee_id": employee_id, "images": len(imgs), "enrolled": 0,
+                    "results": [], "embedder": self.embedder.backend_id,
+                    "error": QUALITY_MESSAGES.get(reason, reason)}
         # drop old vectors for this embedder only (keep other embedders' data)
         self.db.execute(
             "DELETE FROM face_embeddings WHERE employee_id=? AND embedder=?",
@@ -439,8 +458,8 @@ class FaceRecognitionService:
         BOTH the similarity threshold and the identity margin; otherwise it is
         reported as ``Unknown Employee`` (never the closest employee).
         """
-        if not self.embedder.ready:
-            self.embedder.load()
+        if self._ensure_embedder():
+            return []          # model unavailable: report no faces, never raise
         if self._loaded_for != self.embedder.backend_id:
             self.reload_cache()
 
