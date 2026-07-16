@@ -10,6 +10,7 @@ this. Throttled so inference doesn't run on every single frame at full rate.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Optional
 
@@ -18,6 +19,8 @@ import numpy as np
 
 from .base import BBox, Detection, Wire
 from .tracker import MultiClassTracker
+
+_log = logging.getLogger("rtsp_backend.pipeline")
 
 # BGR colours per overlay kind
 _COLORS = {
@@ -269,33 +272,37 @@ class AIPipeline:
                                   "wires": [], "camera_id": camera_id}
 
         # --- face recognition ---
+        # The ENTIRE stage is guarded: neither inference, nor drawing, nor
+        # attendance persistence may ever bubble an exception out of process()
+        # (which would 500 the /analyze endpoint). Any failure is recorded as a
+        # structured ``face_error`` and the full traceback is logged.
         if self.ai.is_enabled("face") and self.ai.face_service is not None:
             t0 = time.monotonic()
             try:
                 faces = self.ai.face_service.recognize_frame(frame)
+                for f in faces:
+                    fd = f.to_dict()
+                    result["faces"].append(fd)
+                    known = f.employee_id is not None
+                    if annotated is not None:
+                        _draw_face(annotated, f.bbox, fd)
+                    if known:
+                        self._log_event("face_recognized", camera_id, camera_name,
+                                        f.label, f.confidence, employee_id=f.employee_id,
+                                        dedup_key=f"face:{camera_id}:{f.employee_id}")
+                        self._record_attendance(f.employee_id, f.label, camera_id,
+                                                camera_name, f.confidence, frame)
+                    else:
+                        # Gate the snapshot on the dedup window too, so a person
+                        # who stays in frame doesn't spawn a JPEG per worker tick.
+                        if self._dedup_ok(f"unknown:{camera_id}"):
+                            snap = self._save_snapshot(frame, "unknown")
+                            self._log_event("unknown_person", camera_id, camera_name,
+                                            "Unknown Employee", f.confidence, snapshot=snap)
             except Exception as exc:
-                faces = []
-                result["face_error"] = str(exc)
+                _log.exception("face stage failed on camera %s", camera_id)
+                result["face_error"] = f"{type(exc).__name__}: {exc}"
             self.ai.record_infer("face", (time.monotonic() - t0) * 1000)
-            for f in faces:
-                fd = f.to_dict()
-                result["faces"].append(fd)
-                known = f.employee_id is not None
-                if annotated is not None:
-                    _draw_face(annotated, f.bbox, fd)
-                if known:
-                    self._log_event("face_recognized", camera_id, camera_name,
-                                    f.label, f.confidence, employee_id=f.employee_id,
-                                    dedup_key=f"face:{camera_id}:{f.employee_id}")
-                    self._record_attendance(f.employee_id, f.label, camera_id,
-                                            camera_name, f.confidence, frame)
-                else:
-                    # Gate the snapshot on the dedup window too, so a person who
-                    # stays in frame doesn't spawn a JPEG on every worker tick.
-                    if self._dedup_ok(f"unknown:{camera_id}"):
-                        snap = self._save_snapshot(frame, "unknown")
-                        self._log_event("unknown_person", camera_id, camera_name,
-                                        "Unknown Employee", f.confidence, snapshot=snap)
 
         # --- generic object detection ---
         if self.ai.is_enabled("detection"):
@@ -329,30 +336,29 @@ class AIPipeline:
             t0 = time.monotonic()
             try:
                 comps = cd.infer(frame)
+                # Persist at most once per component_persist_interval per camera —
+                # the continuous worker calls this ~5x/s; an unthrottled INSERT per
+                # component per frame would grow the table without bound.
+                persist = (now - self._last_comp_persist.get(camera_id, 0.0)) >= self.component_persist_interval
+                for c in comps:
+                    d = c.to_dict()
+                    d["position"] = self._panel_position(c.bbox, frame.shape)
+                    result["components"].append(d)
+                    if annotated is not None:
+                        _draw_box(annotated, c.bbox, c.label, _COLORS["component"], c.confidence)
+                    if persist:
+                        self.db.insert(
+                            "INSERT INTO components(camera_id,name,comp_type,confidence,"
+                            "x1,y1,x2,y2,position,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                            (camera_id, c.label, c.label, c.confidence, c.bbox.x1, c.bbox.y1,
+                             c.bbox.x2, c.bbox.y2, d["position"], time.time()),
+                        )
+                if persist and comps:
+                    self._last_comp_persist[camera_id] = now
             except Exception as exc:
-                comps = []
-                result["components_error"] = str(exc)
+                _log.exception("component stage failed on camera %s", camera_id)
+                result["components_error"] = f"{type(exc).__name__}: {exc}"
             self.ai.record_infer("components", (time.monotonic() - t0) * 1000)
-            # Persist at most once per component_persist_interval per camera — the
-            # continuous worker calls this ~5x/s, and an unthrottled INSERT per
-            # component per frame grows the table without bound and hammers the
-            # DB lock. The live result still reflects every frame's detections.
-            persist = (now - self._last_comp_persist.get(camera_id, 0.0)) >= self.component_persist_interval
-            for c in comps:
-                d = c.to_dict()
-                d["position"] = self._panel_position(c.bbox, frame.shape)
-                result["components"].append(d)
-                if annotated is not None:
-                    _draw_box(annotated, c.bbox, c.label, _COLORS["component"], c.confidence)
-                if persist:
-                    self.db.insert(
-                        "INSERT INTO components(camera_id,name,comp_type,confidence,"
-                        "x1,y1,x2,y2,position,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (camera_id, c.label, c.label, c.confidence, c.bbox.x1, c.bbox.y1,
-                         c.bbox.x2, c.bbox.y2, d["position"], time.time()),
-                    )
-            if persist and comps:
-                self._last_comp_persist[camera_id] = now
 
         # --- wire analysis ---
         if self.ai.is_enabled("wires"):
@@ -360,21 +366,21 @@ class AIPipeline:
             t0 = time.monotonic()
             try:
                 wires = wa.analyze(frame, comps)
+                for w in wires:
+                    result["wires"].append(w.to_dict())
+                    if annotated is not None:
+                        color = _COLORS["wire_ok"] if w.status in ("ok", "unknown") else _COLORS["wire_bad"]
+                        cv2.line(annotated, (int(w.start[0]), int(w.start[1])),
+                                 (int(w.end[0]), int(w.end[1])), color, 2)
+                    if w.status not in ("ok", "unknown"):
+                        self._log_event("wiring_error", camera_id, camera_name,
+                                        f"wire {w.status}", None,
+                                        payload=w.to_dict(),
+                                        dedup_key=f"wire:{camera_id}:{w.wire_uid}:{w.status}")
             except Exception as exc:
-                wires = []
-                result["wires_error"] = str(exc)
+                _log.exception("wire stage failed on camera %s", camera_id)
+                result["wires_error"] = f"{type(exc).__name__}: {exc}"
             self.ai.record_infer("wires", (time.monotonic() - t0) * 1000)
-            for w in wires:
-                result["wires"].append(w.to_dict())
-                if annotated is not None:
-                    color = _COLORS["wire_ok"] if w.status in ("ok", "unknown") else _COLORS["wire_bad"]
-                    cv2.line(annotated, (int(w.start[0]), int(w.start[1])),
-                             (int(w.end[0]), int(w.end[1])), color, 2)
-                if w.status not in ("ok", "unknown"):
-                    self._log_event("wiring_error", camera_id, camera_name,
-                                    f"wire {w.status}", None,
-                                    payload=w.to_dict(),
-                                    dedup_key=f"wire:{camera_id}:{w.wire_uid}:{w.status}")
 
         # --- additional detection modules (fire/weapon/violence/fall/ppe/
         #     human/vehicle) processed generically ---
@@ -407,6 +413,22 @@ class AIPipeline:
         # crowd / occupancy counters from tracked people
         if "human" in result:
             result["crowd_count"] = len(result["human"])
+
+        # Surface WHY an enabled task produced nothing (e.g. a toggled-on
+        # component/detection task with no trained weights) instead of a silent
+        # empty result — this is the honest answer to "it detects nothing".
+        notes: dict[str, str] = {}
+        for task in ("face", "detection", "components", "wires"):
+            st = self.ai._tasks.get(task)
+            if st is None or not st.enabled:
+                continue
+            b = st.backend
+            if b is None or not b.ready:
+                reason = (getattr(b, "_error", None) or getattr(b, "_reason", None)
+                          or st.last_error or "backend not loaded")
+                notes[task] = str(reason)
+        if notes:
+            result["notes"] = notes
 
         if annotated is not None:
             result["_annotated"] = annotated

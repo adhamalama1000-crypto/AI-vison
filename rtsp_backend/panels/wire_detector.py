@@ -467,18 +467,29 @@ class WireDetector:
     """Stateless, weights-free wire instance detector. Tunable via ``params``."""
 
     DEFAULTS = {
-        "min_wire_len": 35,          # px, arc length
-        "min_pixels": 22,            # skeleton pixels
-        "min_elongation": 2.2,       # bbox longer/shorter side
+        "min_wire_len": 40,          # px, arc length
+        "min_pixels": 26,            # skeleton pixels
+        "min_elongation": 2.6,       # bbox longer/shorter side
         "sat_thr": 60, "val_thr": 45,
         "include_dark": True, "dark_val": 55,
         "close_ksize": 5, "open_ksize": 3,
         "spur_prune": 8,             # skeleton spur removal length
         "simplify_eps": 2.0,
+        # --- artifact-rejection filters (reject text / screws / shadows /
+        #     borders / scribbles that are not electrical wires) ---
+        "min_thickness": 1.6,        # px full width; below => text-edge / noise
+        "max_thickness": 34.0,       # px; above => backplate region / duct, not a wire
+        "max_thickness_cv": 0.85,    # width variability; text/blobs vary, wires don't
+        "max_bend_ratio": 3.2,       # arc-length / end-span; scribbles double back
+        "border_margin": 6,          # px; a run hugging the image edge => panel frame
         "merge_gap": 18.0, "merge_angle_tol": 18.0,
         "snap_dist": 55.0,
         "max_wires": 400,
-        "use_hough": True,
+        # Hough is available as a supplementary straight-line recovery pass but
+        # is OFF by default: the per-colour skeleton tracer is both more precise
+        # and does not manufacture the panel-frame / duplicate artifacts a raw
+        # Hough pass tends to. Enable per-call when a use-case needs it.
+        "use_hough": False,
         "hough_min_len": 45, "hough_max_gap": 12,
     }
 
@@ -529,15 +540,44 @@ class WireDetector:
                 if length < p["min_wire_len"]:
                     continue
 
-                dvals = np.array([dist[r, c] for r, c in path_rc], dtype=np.float32)
-                thickness = float(2.0 * np.median(dvals)) if dvals.size else 2.0
+                # --- artifact rejection --------------------------------------
                 start, end = poly[0], poly[-1]
+                span = math.hypot(end[0] - start[0], end[1] - start[1])
+
+                # (1) thickness: real insulated wires have a consistent width in a
+                # sane range. Distance-transform radius -> full width.
+                dvals = np.array([dist[r, c] for r, c in path_rc], dtype=np.float32)
+                if dvals.size == 0:
+                    continue
+                thickness = float(2.0 * np.median(dvals))
+                if thickness < p["min_thickness"] or thickness > p["max_thickness"]:
+                    continue
+                # (2) thickness uniformity: text strokes / blobs / shadows vary a
+                # lot in width along their medial axis; a wire barely varies.
+                med = max(1e-3, float(np.median(dvals)))
+                cv_thick = float(np.std(dvals) / med)
+                if cv_thick > p["max_thickness_cv"]:
+                    continue
+                # (3) straightness: a wire is straight or gently curved. Scribbles
+                # and handwriting double back (length >> end-to-end span).
+                if span > 1e-3 and (length / span) > p["max_bend_ratio"]:
+                    continue
+                # (4) panel border / frame: reject a run that hugs the image edge
+                # for most of its length.
+                bm = p["border_margin"]
+                on_border = sum(1 for (px, py) in poly
+                                if px <= bm or py <= bm or px >= w - bm or py >= h - bm)
+                if on_border / max(1, len(poly)) > 0.8:
+                    continue
+
                 wires.append(WireInstance(
                     wire_uid=f"w{uid}", start=start, end=end, polyline=poly,
                     length=length, thickness=thickness, color=color_name,
                     direction=_angle(start, end),
                     confidence=float(min(0.95, 0.55 + 0.08 * math.log1p(length))),
-                    extra={"pixels": int(len(xs)), "elongation": round(elong, 2)},
+                    extra={"pixels": int(len(xs)), "elongation": round(elong, 2),
+                           "bend": round(length / span, 2) if span > 1e-3 else None,
+                           "thickness_cv": round(cv_thick, 2)},
                 ))
                 uid += 1
                 if len(wires) >= p["max_wires"]:
