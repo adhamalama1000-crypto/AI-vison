@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { LoadingScreen } from "./components/LoadingScreen";
 import Dashboard from "./pages/Dashboard";
 import Live from "./pages/Live";
 import Employees from "./pages/Employees";
@@ -20,8 +22,9 @@ import PanelAnalysis from "./pages/PanelAnalysis";
 import Inspection from "./pages/Inspection";
 import Reports from "./pages/Reports";
 import Metrics from "./pages/Metrics";
+import Login from "./pages/Login";
 
-export default function App() {
+function AppShell() {
   return (
     <Layout>
       <Routes>
@@ -48,5 +51,26 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
+  );
+}
+
+export default function App() {
+  // Brief branded splash on first load, then fade out.
+  const [showSplash, setShowSplash] = useState(true);
+  const [fading, setFading] = useState(false);
+  useEffect(() => {
+    const t1 = setTimeout(() => setFading(true), 850);
+    const t2 = setTimeout(() => setShowSplash(false), 1350);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  return (
+    <>
+      {showSplash && <LoadingScreen fading={fading} />}
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/*" element={<AppShell />} />
+      </Routes>
+    </>
   );
 }

@@ -5,6 +5,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { ThemeProvider } from "./hooks/useTheme";
 import { ToastProvider } from "./hooks/useToast";
+// Bundle the Inter typeface locally (self-contained; works offline on a LAN).
+// Latin subset only — keeps the built asset set lean.
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-500.css";
+import "@fontsource/inter/latin-600.css";
+import "@fontsource/inter/latin-700.css";
+import "@fontsource/inter/latin-800.css";
 import "./index.css";
 
 const queryClient = new QueryClient({
