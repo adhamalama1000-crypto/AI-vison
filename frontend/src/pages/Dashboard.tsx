@@ -81,8 +81,8 @@ export default function Dashboard() {
         <Card className="p-5">
           <SectionTitle title="System resources" />
           <div className="grid grid-cols-2 gap-2">
-            <RadialGauge value={data.resources.cpu_percent} label="CPU" color="#3366ff" />
-            <RadialGauge value={data.resources.ram_percent} label="RAM" color="#8b5cf6" />
+            <RadialGauge value={data.resources.cpu_percent} label="CPU" color="#D62027" />
+            <RadialGauge value={data.resources.ram_percent} label="RAM" color="#111111" />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
             <div className="rounded-xl surface-2 p-2.5"><Cpu className="mx-auto mb-1 h-4 w-4 text-brand-400" /><span className="text-muted">{fmt(data.resources.cpu_percent, 0)}% used</span></div>

@@ -1,16 +1,17 @@
 import { useState, type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
   LayoutDashboard, Video, Users, Bell, Cpu, Settings as SettingsIcon,
-  Sun, Moon, Menu, X, ScanFace, Activity, Zap, Waypoints,
+  Sun, Moon, Menu, X, Zap, Waypoints, LogOut, ChevronDown,
   Database, GitCompare, FileText, ScanLine, Layers, ClipboardCheck,
-  GaugeCircle, CalendarCheck, CircuitBoard, ScanText,
+  GaugeCircle, CalendarCheck, CircuitBoard, ScanText, ScanFace,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { useEventSocket } from "../hooks/useEventSocket";
-import { useHealth } from "../hooks/useData";
-import { cx } from "../lib/format";
+import { useHealth, useEvents } from "../hooks/useData";
+import { cx, timeAgo, EVENT_LABEL } from "../lib/format";
 import { Dot } from "./ui/primitives";
+import { Logo, LogoMark } from "./Logo";
 
 const NAV = [
   { section: "Overview", items: [
@@ -60,15 +61,11 @@ export function Layout({ children }: { children: ReactNode }) {
       "fixed inset-y-0 left-0 z-40 transition-transform lg:static lg:translate-x-0",
       open ? "translate-x-0" : "-translate-x-full",
     )}>
-      <div className="flex items-center gap-3 border-b px-5 py-[18px]">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 shadow-lg shadow-brand-600/30">
-          <ScanFace className="h-5 w-5 text-white" />
-        </div>
-        <div className="leading-tight">
-          <p className="text-sm font-bold">AI Vision</p>
-          <p className="text-[11px] text-muted">Platform v3.1.5</p>
-        </div>
-        <button className="ml-auto lg:hidden text-muted" onClick={() => setOpen(false)}><X className="h-5 w-5" /></button>
+      <div className="flex items-center gap-3 border-b px-5 py-4">
+        <Logo size={38} subtitle="Vision Platform" textClassName="text-[15px]" />
+        <button className="ml-auto lg:hidden text-muted" onClick={() => setOpen(false)} aria-label="Close menu">
+          <X className="h-5 w-5" />
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -79,10 +76,10 @@ export function Layout({ children }: { children: ReactNode }) {
               {group.items.map((it) => (
                 <NavLink key={it.to} to={it.to} end={(it as any).end} onClick={() => setOpen(false)}
                   className={({ isActive }) => cx(
-                    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
+                    "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150",
                     isActive
                       ? "bg-brand-600 text-white shadow-sm shadow-brand-600/30"
-                      : "text-muted hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
+                      : "text-muted hover:bg-brand-600/[0.08] hover:text-brand-600",
                   )}>
                   <it.icon className="h-[18px] w-[18px]" /> {it.label}
                 </NavLink>
@@ -97,6 +94,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <span className="flex items-center gap-2 text-xs font-semibold"><Dot tone={conn.tone} pulse={state === "live"} /> {conn.text}</span>
           <span className="text-[11px] text-muted">{health ? `${health.cameras_connected}/${health.cameras_total} cams` : "—"}</span>
         </div>
+        <p className="mt-3 text-center text-[10px] text-faint">AI Human Vision · v5.0</p>
       </div>
     </aside>
   );
@@ -105,33 +103,109 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {open && <div className="fixed inset-0 z-30 bg-slate-950/50 lg:hidden" onClick={() => setOpen(false)} />}
+      {open && <div className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm lg:hidden" onClick={() => setOpen(false)} />}
       {Sidebar}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b surface px-4 py-3 sm:px-6">
-          <button className="btn-icon btn-ghost lg:hidden" onClick={() => setOpen(true)}><Menu className="h-5 w-5" /></button>
-          <div>
-            <h1 className="text-lg font-bold leading-tight sm:text-xl">{title.label}</h1>
-            <p className="hidden text-xs text-muted sm:block">{title.sub}</p>
+        <header className="sticky top-0 z-20 flex items-center gap-3 border-b glass px-4 py-3 sm:px-6">
+          <button className="btn-icon btn-ghost lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Menu className="h-5 w-5" /></button>
+          {/* compact logo on mobile where the sidebar is hidden */}
+          <LogoMark size={30} className="lg:hidden" />
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-extrabold leading-tight sm:text-xl">{title.label}</h1>
+            <p className="hidden truncate text-xs text-muted sm:block">{title.sub}</p>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <TopGauge icon={<Activity className="h-3.5 w-3.5" />} label="FPS" val={health ? "live" : ""} />
-            <button onClick={toggle} className="btn-icon btn-outline" title="Toggle theme" aria-label="Toggle theme">
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            <NotificationsMenu />
+            <button onClick={toggle} className="btn-icon btn-ghost" title="Toggle theme" aria-label="Toggle theme">
+              {theme === "dark" ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
             </button>
+            <ProfileMenu />
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+          <div key={loc.pathname} className="animate-fade-in">{children}</div>
+        </main>
       </div>
     </div>
   );
 }
 
-function TopGauge({ icon, label }: { icon: ReactNode; label: string; val?: string }) {
+/* ---- notifications popover (recent events) ---- */
+function NotificationsMenu() {
+  const [open, setOpen] = useState(false);
+  const { data } = useEvents("?limit=6");
+  const events = data?.events ?? [];
   return (
-    <div className="hidden items-center gap-2 rounded-xl surface-2 px-3 py-2 text-xs font-semibold sm:flex">
-      <span className="text-brand-400">{icon}</span>
-      <span className="text-muted">{label}</span>
+    <div className="relative">
+      <button className="btn-icon btn-ghost relative" onClick={() => setOpen((o) => !o)} aria-label="Notifications">
+        <Bell className="h-[18px] w-[18px]" />
+        {events.length > 0 && (
+          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-brand-600 ring-2 ring-[rgb(var(--surface))]" />
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-40 mt-2 w-80 origin-top-right animate-scale-in card p-2 shadow-soft-lg">
+            <div className="flex items-center justify-between px-2 py-1.5">
+              <p className="text-sm font-bold">Notifications</p>
+              <Link to="/events" onClick={() => setOpen(false)} className="text-xs font-semibold text-brand-600 hover:underline">View all</Link>
+            </div>
+            <div className="max-h-80 overflow-y-auto">
+              {events.length === 0 ? (
+                <p className="px-2 py-6 text-center text-sm text-muted">No recent events</p>
+              ) : events.map((e) => (
+                <div key={e.id} className="flex items-start gap-3 rounded-lg px-2 py-2 hover:bg-[rgb(var(--surface-2))]">
+                  <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-brand-600" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{e.label || EVENT_LABEL[e.type] || e.type}</p>
+                    <p className="text-[11px] text-muted">{e.camera_name || e.camera_id || "—"} · {timeAgo(e.created_at)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---- profile popover ---- */
+function ProfileMenu() {
+  const [open, setOpen] = useState(false);
+  const nav = useNavigate();
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 rounded-xl border px-1.5 py-1.5 pr-2 transition-colors hover:bg-[rgb(var(--surface-2))]"
+        aria-label="Profile">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-600 text-xs font-bold text-white">OP</span>
+        <ChevronDown className="hidden h-4 w-4 text-muted sm:block" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-40 mt-2 w-56 origin-top-right animate-scale-in card p-2 shadow-soft-lg">
+            <div className="flex items-center gap-3 px-2 py-2">
+              <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand-600 text-sm font-bold text-white">OP</span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold">Operator</p>
+                <p className="truncate text-[11px] text-muted">AI Human Vision</p>
+              </div>
+            </div>
+            <div className="my-1 border-t" />
+            <Link to="/settings" onClick={() => setOpen(false)}
+              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium hover:bg-[rgb(var(--surface-2))]">
+              <SettingsIcon className="h-4 w-4 text-muted" /> Settings
+            </Link>
+            <button onClick={() => { setOpen(false); nav("/login"); }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-brand-600 hover:bg-brand-600/[0.08]">
+              <LogOut className="h-4 w-4" /> Sign out
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1,4 +1,15 @@
-# AI Vision Platform
+# AI Human Vision
+
+> **Frontend:** AI Human Vision ships a premium, ACUD-inspired corporate
+> dashboard — light-by-default (with a dark theme), ACUD red (`#D62027`) accent,
+> the Inter typeface (bundled, offline-safe), a white sidebar with red-active
+> navigation, a glass top navbar (logo, notifications, profile, theme toggle),
+> a branded loading splash and sign-in screen, and soft-shadowed rounded cards,
+> enterprise tables and animated forms throughout. The React source lives in
+> `frontend/`; the production build is served by the backend at `/app/`. The
+> brand mark is an original placeholder in `frontend/src/components/Logo.tsx`
+> and `frontend/public/logo.svg` — drop in your own logo file to replace it.
+
 
 An RTSP camera backend extended into a full **AI vision platform**: live camera
 ingestion, a pluggable AI subsystem (face recognition, object/component

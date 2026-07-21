@@ -8,7 +8,7 @@ import { useTheme } from "../../hooks/useTheme";
 function axisColor(theme: string) { return theme === "dark" ? "#64748b" : "#94a3b8"; }
 function gridColor(theme: string) { return theme === "dark" ? "#242d42" : "#e2e8f0"; }
 
-export function LiveLineChart({ data, dataKey, color = "#3366ff", unit = "", height = 220, label }: {
+export function LiveLineChart({ data, dataKey, color = "#D62027", unit = "", height = 220, label }: {
   data: any[]; dataKey: string; color?: string; unit?: string; height?: number; label?: string;
 }) {
   const { theme } = useTheme();
@@ -34,7 +34,7 @@ export function LiveLineChart({ data, dataKey, color = "#3366ff", unit = "", hei
   );
 }
 
-export function RadialGauge({ value, max = 100, label, unit = "%", color = "#3366ff", size = 150 }: {
+export function RadialGauge({ value, max = 100, label, unit = "%", color = "#D62027", size = 150 }: {
   value: number | null; max?: number; label: string; unit?: string; color?: string; size?: number;
 }) {
   const { theme } = useTheme();
@@ -59,7 +59,7 @@ export function RadialGauge({ value, max = 100, label, unit = "%", color = "#336
   );
 }
 
-export function SimpleBarChart({ data, dataKey = "value", xKey = "name", color = "#3366ff", height = 220, unit = "" }: {
+export function SimpleBarChart({ data, dataKey = "value", xKey = "name", color = "#D62027", height = 220, unit = "" }: {
   data: any[]; dataKey?: string; xKey?: string; color?: string; height?: number; unit?: string;
 }) {
   const { theme } = useTheme();
