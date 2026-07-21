@@ -5,6 +5,7 @@ import {
   Sun, Moon, Menu, X, Zap, Waypoints, LogOut, ChevronDown,
   Database, GitCompare, FileText, ScanLine, Layers, ClipboardCheck,
   GaugeCircle, CalendarCheck, CircuitBoard, ScanText, ScanFace,
+  ScanEye, GitCompareArrows,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { useEventSocket } from "../hooks/useEventSocket";
@@ -24,6 +25,10 @@ const NAV = [
     { to: "/employees", label: "Employees", icon: Users },
     { to: "/attendance", label: "Attendance", icon: CalendarCheck },
     { to: "/events", label: "Events", icon: Bell },
+  ]},
+  { section: "Image AI", items: [
+    { to: "/image-analysis", label: "Image Analysis", icon: ScanEye },
+    { to: "/image-comparison", label: "Image Comparison", icon: GitCompareArrows },
   ]},
   { section: "Industrial Inspection", items: [
     { to: "/reference-panels", label: "Reference Panels", icon: CircuitBoard },
@@ -223,6 +228,8 @@ function titleForPath(p: string): { label: string; sub: string } {
     if (/\/training\/[^/]+$/.test(p)) return { label: "Training Progress", sub: "Live training metrics & controls" };
     return { label: "Training", sub: "Configure, launch & monitor training jobs" };
   }
+  if (p.startsWith("/image-analysis")) return { label: "AI Image Analysis", sub: "Upload any image — objects, colours, text, tags & summary" };
+  if (p.startsWith("/image-comparison")) return { label: "Image Comparison", sub: "Detect every difference between two images" };
   if (p.startsWith("/reference-panels")) return { label: "Reference Panels", sub: "Learn a correct panel, then inspect against it" };
   if (p.startsWith("/topology")) return { label: "Topology Viewer", sub: "Component / terminal / wire electrical graph" };
   if (p.startsWith("/datasheets")) return { label: "Datasheets", sub: "OCR schematics into an expected wiring graph" };

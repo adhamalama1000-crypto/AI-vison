@@ -168,6 +168,7 @@
   animation: shimmer 1.4s infinite;
 }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
+@keyframes indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
 
 .grid-dots {
   background-image: radial-gradient(rgb(var(--border) / 0.6) 1px, transparent 1px);

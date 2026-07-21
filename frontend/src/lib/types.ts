@@ -284,3 +284,31 @@ export interface DatasheetExtract {
   expected_graph: RefGraph & { node_count: number; edge_count: number };
   note: string | null;
 }
+
+// ---- AI Image Analysis & Comparison ----
+export interface ImgObject { label: string; confidence: number; x1: number; y1: number; x2: number; y2: number; source: string | null; }
+export interface OcrItem { text: string; confidence: number | null; x1: number | null; y1: number | null; x2: number | null; y2: number | null; engine: string | null; }
+export interface DominantColor { hex: string; rgb: number[]; name: string; ratio: number; }
+export interface ImageRow {
+  id: number; name: string | null; path: string; format: string | null;
+  width: number | null; height: number | null; n_objects: number;
+  summary: string | null; status: string; created_at: number;
+}
+export interface ImagesResponse { images: ImageRow[]; total: number; }
+export interface ImageDetail extends ImageRow {
+  bytes: number | null; sha256: string | null; phash: string | null;
+  dominant_colors: DominantColor[]; tags: string[]; metadata: any;
+  analysis: any; ocr_text: string | null;
+  objects: ImgObject[]; ocr_items: OcrItem[];
+}
+export interface ImageUploadResult { id: number; name: string; path: string; format: string; width: number; height: number; bytes: number; status: string; }
+
+export interface ImgDiff { diff_type: string; severity: string; detail: string | null; confidence: number | null; x1: number | null; y1: number | null; x2: number | null; y2: number | null; }
+export interface ComparisonResult {
+  id: number; ref_image_id: number | null; cur_image_id: number | null;
+  similarity: number; n_diffs: number; status: string;
+  overlay_path: string | null; heatmap_path: string | null; aligned_path: string | null;
+  report_pdf: string | null; report: any; diffs: ImgDiff[]; created_at: number;
+}
+export interface ComparisonsResponse { comparisons: ComparisonResult[]; total: number; }
+export interface ImageHistory { images: ImageRow[]; comparisons: ComparisonResult[]; }

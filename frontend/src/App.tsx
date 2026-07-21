@@ -20,6 +20,8 @@ import TopologyViewer from "./pages/TopologyViewer";
 import Datasheets from "./pages/Datasheets";
 import PanelAnalysis from "./pages/PanelAnalysis";
 import Inspection from "./pages/Inspection";
+import ImageAnalysis from "./pages/ImageAnalysis";
+import ImageComparison from "./pages/ImageComparison";
 import Reports from "./pages/Reports";
 import Metrics from "./pages/Metrics";
 import Login from "./pages/Login";
@@ -45,6 +47,8 @@ function AppShell() {
         <Route path="/datasheets" element={<Datasheets />} />
         <Route path="/panel" element={<PanelAnalysis />} />
         <Route path="/inspection" element={<Inspection />} />
+        <Route path="/image-analysis" element={<ImageAnalysis />} />
+        <Route path="/image-comparison" element={<ImageComparison />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/models" element={<Models />} />
         <Route path="/settings" element={<Settings />} />

@@ -31,6 +31,18 @@ dashboard (served at `/`) drives every feature through the same public API.
 > [`CHANGES_v4.0.0.md`](CHANGES_v4.0.0.md) for exactly what is real vs. what
 > needs your dataset/GPU.
 
+> **AI Image Analysis & Comparison module.** Upload *any* image (panels, PCBs,
+> machines, people, products, buildings, documents, medical, screenshots,
+> vehicles …). The backend analyses it — objects + boxes, dominant colours, OCR
+> text, perceptual hash, tags, quality defects and an AI summary — and can
+> **compare** a reference vs a current image to detect every difference
+> (missing/new/moved objects, colour/text changes, changed regions) with a
+> similarity %, a green/amber/red overlay + heatmap, and PDF/JSON export. Uses
+> ORB registration (perspective compensation), luminance matching (lighting
+> compensation) and SSIM. New **Image Analysis** and **Image Comparison**
+> dashboard pages and an `/api/images/*` REST surface. Details:
+> [`docs/IMAGE_ANALYSIS.md`](docs/IMAGE_ANALYSIS.md).
+
 > **Reference Panel Inspection module.** Learn a known-good electrical panel
 > from RTSP/uploaded images (real per-colour wire tracing, terminal detection,
 > ORB feature embedding, and an electrical graph), then inspect any panel

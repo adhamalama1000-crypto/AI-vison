@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from . import ai as ai_router
-from . import analysis, attendance, datasets, datasheets, employees, inspection
+from . import analysis, attendance, datasets, datasheets, employees, images, inspection
 from . import panels, reference, reference_panels, reports, training
 from .util import Context
 
@@ -24,6 +24,7 @@ def build_all_routers(ctx: Context) -> list[APIRouter]:
         reference.build_router(ctx),
         reference_panels.build_router(ctx),
         datasheets.build_router(ctx),
+        images.build_router(ctx),
         panels.build_router(ctx),
         inspection.build_router(ctx),
         reports.build_router(ctx),
