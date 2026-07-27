@@ -206,11 +206,23 @@ def test_panel_analysis_produces_report(client):
                     data={"make_pdf": "true"})
     assert r.status_code == 200
     d = r.json()
-    assert d["wire_total"] >= 1                    # classical wire baseline finds lines
+    # Wiring detection is disabled by design — it hallucinated hundreds of
+    # "wires" from seams/edges/shadows. It must report exactly zero and say why.
+    assert d["wire_total"] == 0
+    assert d["result"]["wire_analysis"]["enabled"] is False
+    assert d["result"]["wire_analysis"]["reason"]
     assert d["annotated"] and d["json"]
     # no trained component model => zero components, with an honest note
     assert d["component_total"] == 0
+    assert d["result"]["component_model_loaded"] is False
     assert any("component model" in n for n in d["result"]["notes"])
+    # the report skeleton is always present, even with nothing detected
+    rep = d["result"]["report"]
+    for section in ("inspection_summary", "panel_type", "detected_components",
+                    "component_count", "possible_function",
+                    "possible_missing_components", "potential_maintenance_notes",
+                    "confidence_statistics", "inspection_time"):
+        assert section in rep, section
     assert client.get("/api/panels").json()["total"] >= 1
 
 

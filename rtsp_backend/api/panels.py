@@ -71,9 +71,21 @@ def build_router(ctx) -> APIRouter:
         if make_pdf:
             pdf_rel = reports_svc.panel_pdf(ctx.data_dir, result, annotated_rel)
 
+        panel = result.get("panel") or {}
         summary = {
             "component_total": result["component_total"],
             "component_counts": result["component_counts"],
+            "component_types": len(result.get("bill_of_materials") or []),
+            "panel_type": panel.get("panel_type"),
+            "panel_type_name": panel.get("panel_type_name"),
+            "panel_type_confidence": panel.get("confidence"),
+            "panel_function": panel.get("function"),
+            "application": (result.get("application") or {}).get("application"),
+            "unknown_components": (result.get("confidence") or {}).get("unknown", 0),
+            "mean_confidence": (result.get("confidence") or {}).get("mean"),
+            "duration_ms": result.get("duration_ms"),
+            # Wiring analysis is disabled by design; kept at zero so older
+            # clients reading these keys still work.
             "wire_total": result["wire_total"],
             "wire_color_counts": result["wire_color_counts"],
             "annotated": annotated_rel, "json": json_rel, "pdf": pdf_rel,
@@ -81,7 +93,7 @@ def build_router(ctx) -> APIRouter:
         rid = db.insert(
             "INSERT INTO reports(kind,title,path,summary,created_at) "
             "VALUES(?,?,?,?,?)",
-            ("panel_analysis", "Panel Analysis", pdf_rel or json_rel,
+            ("panel_analysis", "Panel Inspection", pdf_rel or json_rel,
              json.dumps(summary), time.time()))
         return {"id": rid, "result": result, **summary}
 

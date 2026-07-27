@@ -25,6 +25,9 @@ from . import embedders as _embedders  # noqa: F401
 from . import modules as _modules  # noqa: F401
 from . import wires as _wires  # noqa: F401
 from . import registry
+# Registers the industrial component recognisers (trained ONNX / Ultralytics,
+# zero-shot OWLv2 / Grounding DINO / Florence-2, and the fusion ensemble).
+from ..electrical import recognizer as _electrical  # noqa: F401
 from .base import ModelBackend
 from .face_service import FaceRecognitionService
 
@@ -77,8 +80,25 @@ DEFAULTS = {
         "min_face_size": 50, "enroll_min_face_size": 80,
         "topk_vote": 5, "device": "cpu",
     }),
-    "components": ("onnx_components", {"conf": 0.25, "iou": 0.45, "device": "cpu"}),
-    "wires": ("advanced_wires", {"min_wire_len": 35, "device": "cpu"}),
+    # Component recognition is the platform's primary objective. The default is
+    # the industrial recogniser: taxonomy-mapped labels, per-class NMS, geometric
+    # plausibility gating and an honest "Unknown Industrial Component" fallback.
+    "components": ("industrial_onnx", {
+        "decode_floor": 0.10,   # decode low, then gate per class
+        "nms_iou": 0.50,
+        "strictness": 1.0,      # multiplier on every per-class threshold
+        "unknown_floor": 0.18,  # below this nothing is reported at all
+        "max_detections": 200,
+        "check_plausibility": True,
+        "device": "cpu",
+    }),
+    # Wiring analysis is DISABLED by default and deliberately so: the classical
+    # line/colour tracer turned cabinet seams, duct edges, device outlines and
+    # shadows into hundreds of phantom "wires" per frame, which swamped the
+    # component result. It stays selectable as an experimental backend, but no
+    # deployment gets it unless an operator explicitly asks.
+    # See docs/AUDIT_PANEL_INSPECTOR.md.
+    "wires": ("null_wires", {"device": "cpu"}),
     "fire": ("onnx_fire", {"conf": 0.35, "iou": 0.45, "device": "cpu"}),
     "violence": ("onnx_violence", {"conf": 0.5, "iou": 0.45, "device": "cpu"}),
     "fall": ("onnx_fall", {"conf": 0.4, "iou": 0.45, "device": "cpu"}),
@@ -87,6 +107,30 @@ DEFAULTS = {
     "human": ("onnx_human", {"conf": 0.3, "iou": 0.45, "device": "cpu"}),
     "vehicle": ("onnx_vehicle", {"conf": 0.3, "iou": 0.45, "device": "cpu"}),
 }
+
+
+# Backends superseded by the panel-inspector redesign. A persisted selection is
+# migrated on startup, otherwise an existing installation would keep running the
+# phantom-wire tracer and the label-shifting component decoder forever.
+_MIGRATE_BACKEND: dict[str, dict[str, str]] = {
+    "components": {"onnx_components": "industrial_onnx"},
+    "wires": {"advanced_wires": "null_wires", "classical_wires": "null_wires"},
+}
+
+#: Params that only made sense for the retired backends.
+_STALE_PARAM_KEYS = ("min_wire_len", "conf", "iou")
+
+
+def _migrate(task: str, backend_id: str, params: dict) -> tuple[str, dict, bool]:
+    """Return ``(backend_id, params, changed)`` after applying migrations."""
+    target = _MIGRATE_BACKEND.get(task, {}).get(backend_id)
+    if not target:
+        return backend_id, params, False
+    fresh = {k: v for k, v in (params or {}).items()
+             if k not in _STALE_PARAM_KEYS}
+    default_params = DEFAULTS.get(task, (target, {}))[1]
+    merged = {**default_params, **fresh}
+    return target, merged, True
 
 
 class TaskState:
@@ -121,6 +165,8 @@ class AIModelManager:
         self._lock = threading.RLock()
         self._tasks: dict[str, TaskState] = {t: TaskState(t) for t in TASKS}
         self.face_service: Optional[FaceRecognitionService] = None
+        #: human-readable record of startup backend migrations, surfaced by the API
+        self._migrations: list[str] = []
         self._restore()
 
     # -- persistence -------------------------------------------------------
@@ -136,6 +182,14 @@ class AIModelManager:
                 backend_id = row["backend"]
                 enabled = bool(row["enabled"])
                 params = json.loads(row["params"]) if row["params"] else {}
+                backend_id, params, migrated = _migrate(task, backend_id, params)
+                if migrated:
+                    if task == "wires":
+                        enabled = False
+                    self._persist(task, backend_id, enabled, params)
+                    self._migrations.append(
+                        f"{task}: migrated to '{backend_id}'"
+                        + (" and disabled" if task == "wires" else ""))
             else:
                 backend_id, params = DEFAULTS[task]
                 # Face recognition is enabled out of the box: an enrolled
@@ -381,6 +435,7 @@ class AIModelManager:
             "tasks": {t: self.task_status(t) for t in TASKS},
             "resources": self.resource_metrics(),
             "catalog": registry.catalog(),
+            "migrations": list(self._migrations),
         }
 
     def record_infer(self, task: str, infer_ms: float) -> None:

@@ -64,8 +64,14 @@ def compare(expected: dict, observed: dict) -> dict:
                                "expected": 0, "found": o,
                                "detail": f"unexpected {color} wires (found {o})"})
 
-    has_component_model = not any(
-        "no trained component model" in n for n in observed.get("notes", []))
+    # Prefer the explicit flag the inspection engine sets; fall back to sniffing
+    # the note text for results produced by older versions.
+    if "component_model_loaded" in observed:
+        has_component_model = bool(observed["component_model_loaded"])
+    else:
+        has_component_model = not any(
+            "no trained component model" in str(n)
+            for n in observed.get("notes", []))
 
     if not has_component_model and not exp_c:
         status = "warning"

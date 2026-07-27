@@ -1,111 +1,86 @@
 """
-Panel analysis engine (Part 8).
+Panel analysis service — thin adapter over the industrial inspection engine.
 
-Runs the real electrical-component detector and the wire analyzer against a
-single still image (uploaded or grabbed from a camera), then:
+The real work lives in :mod:`rtsp_backend.electrical.inspector`. This module
+exists to give the API and the older consumers (reference-panel templating,
+reference-vs-observed inspection) a stable, backwards-compatible dict shape
+while the richer inspection result is carried alongside.
 
-* counts every detected component by class,
-* records every wire with its dominant colour and endpoints,
-* builds an electrical topology (components = nodes, wires = edges linking the
-  nearest component terminals),
-* renders an annotated image, and
-* returns a structured JSON result.
-
-It never invents components: if no trained component model is loaded the
-component list is empty (and ``components_note`` says why), while the classical
-wire baseline still returns detected line geometry. This is the same honesty
-contract as the live pipeline.
+What changed from the previous implementation
+---------------------------------------------
+The old ``analyze`` ran the component detector *and* a classical wire tracer over
+the frame. With no trained component model the component list was empty and the
+wire tracer emitted hundreds of "wires" from cabinet seams, DIN-rail edges,
+device outlines, duct lips and shadows — so every panel was reported as a mass
+of wires and nothing else. That stage has been removed: ``wires`` is always
+empty here and the result says why. Component recognition, panel-type inference
+and expert analysis replace it.
 """
 
 from __future__ import annotations
 
-from collections import Counter
-from typing import Any
+from typing import Any, Optional
 
-import cv2
 import numpy as np
 
-from .ai.pipeline import _COLORS, _draw_box
-from .ai.base import BBox
+from .electrical import inspector, postprocess as pp
+
+#: Kept for consumers that still read the legacy wire keys.
+_EMPTY_WIRE_KEYS: dict[str, Any] = {
+    "wires": [],
+    "wire_color_counts": {},
+    "wire_total": 0,
+}
+
+#: Legacy note text that :mod:`rtsp_backend.inspection_svc` used to sniff for.
+NO_MODEL_NOTE = ("no trained component model loaded — train and export a "
+                 "detector into models/components/ (see "
+                 "training/electrical/README.md) to populate components")
 
 
-def _panel_position(box: BBox, shape) -> str:
-    h, w = shape[:2]
-    cx, cy = box.center
-    col = "left" if cx < w / 3 else ("center" if cx < 2 * w / 3 else "right")
-    row = "top" if cy < h / 3 else ("middle" if cy < 2 * h / 3 else "bottom")
-    return f"{row}-{col}"
+def analyze(ai_manager, image_bgr: np.ndarray, annotate: bool = True,
+            gate_config: Optional[pp.GateConfig] = None) -> dict:
+    """Inspect one panel image.
 
-
-def analyze(ai_manager, image_bgr: np.ndarray, annotate: bool = True) -> dict:
-    result: dict[str, Any] = {
-        "image_size": [int(image_bgr.shape[1]), int(image_bgr.shape[0])],
-        "components": [], "component_counts": {}, "component_total": 0,
-        "wires": [], "wire_color_counts": {}, "wire_total": 0,
-        "topology": {"nodes": [], "edges": []},
-        "notes": [],
-    }
-    annotated = image_bgr.copy() if annotate else None
-
-    # -- components ------------------------------------------------------
-    comps = []
-    cbackend = ai_manager.backend("components")
-    if cbackend is not None and getattr(cbackend, "ready", False):
+    Returns the full inspection result plus the legacy keys
+    (``components``/``component_counts``/``component_total`` and the now-always-
+    empty wire keys) so existing callers keep working unchanged.
+    """
+    backend = ai_manager.backend("components") if ai_manager is not None else None
+    if backend is not None and not getattr(backend, "ready", False):
+        # Give a lazily-configured backend one chance to load, exactly as the
+        # previous implementation did, so a freshly-dropped model activates
+        # without a restart.
         try:
-            comps = cbackend.infer(image_bgr)
-        except Exception as exc:
-            result["notes"].append(f"component inference error: {exc}")
-    else:
-        result["notes"].append(
-            "no trained component model loaded — drop a trained detector into "
-            "models/components/ to populate components")
+            backend.load()
+        except Exception:
+            pass
 
-    counts: Counter = Counter()
-    for i, c in enumerate(comps):
-        pos = _panel_position(c.bbox, image_bgr.shape)
-        counts[c.label] += 1
-        d = c.to_dict()
-        d["position"] = pos
-        d["node_id"] = i
-        result["components"].append(d)
-        result["topology"]["nodes"].append(
-            {"id": i, "label": c.label, "bbox": c.bbox.as_list(), "position": pos})
-        if annotated is not None:
-            _draw_box(annotated, c.bbox, c.label, _COLORS["component"], c.confidence)
-    result["component_counts"] = dict(counts)
-    result["component_total"] = len(comps)
+    result = inspector.inspect_panel(backend, image_bgr, annotate=annotate,
+                                     gate_config=gate_config)
 
-    # -- wires -----------------------------------------------------------
-    wires = []
-    wbackend = ai_manager.backend("wires")
-    if wbackend is not None:
-        if not getattr(wbackend, "ready", False):
-            try:
-                wbackend.load()
-            except Exception:
-                pass
-        try:
-            wires = wbackend.analyze(image_bgr, comps)
-        except Exception as exc:
-            result["notes"].append(f"wire analysis error: {exc}")
+    model_loaded = bool(backend is not None and getattr(backend, "ready", False))
+    if not model_loaded:
+        result.setdefault("notes", []).append(NO_MODEL_NOTE)
+    result["component_model_loaded"] = model_loaded
 
-    color_counts: Counter = Counter()
-    for w in wires:
-        color_counts[w.color or "unknown"] += 1
-        result["wires"].append(w.to_dict())
-        result["topology"]["edges"].append({
-            "wire_uid": w.wire_uid, "start": list(w.start), "end": list(w.end),
-            "color": w.color, "status": w.status,
-            "from": w.from_component, "to": w.to_component})
-        if annotated is not None:
-            col = _COLORS["wire_ok"] if w.status in ("ok", "unknown") else _COLORS["wire_bad"]
-            cv2.line(annotated, (int(w.start[0]), int(w.start[1])),
-                     (int(w.end[0]), int(w.end[1])), col, 2)
-    result["wire_color_counts"] = dict(color_counts)
-    result["wire_total"] = len(wires)
-    result["topology"]["node_count"] = len(result["topology"]["nodes"])
-    result["topology"]["edge_count"] = len(result["topology"]["edges"])
-
-    if annotated is not None:
-        result["_annotated"] = annotated
+    # Legacy-compatible view.
+    result.update(_EMPTY_WIRE_KEYS)
+    result["topology"] = {"nodes": [
+        {"id": c["index"], "label": c["label"], "bbox": c["bbox"],
+         "position": c["position"], "class_id": c["class_id"]}
+        for c in result.get("components", [])
+    ], "edges": [], "node_count": result.get("component_total", 0),
+        "edge_count": 0}
+    result["report"] = inspector.build_report(result)
     return result
+
+
+def analyze_and_report(ai_manager, image_bgr: np.ndarray,
+                       annotate: bool = True) -> tuple[dict, str]:
+    """Convenience: inspection result plus the rendered plain-text report."""
+    result = analyze(ai_manager, image_bgr, annotate=annotate)
+    return result, inspector.report_text(result["report"])
+
+
+__all__ = ["analyze", "analyze_and_report", "NO_MODEL_NOTE"]

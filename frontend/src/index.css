@@ -3,38 +3,45 @@
 @tailwind utilities;
 
 /* =====================================================================
-   AI Human Vision — design tokens
-   Light (default) = ACUD premium corporate: soft grey canvas, white cards,
-   near-black text, ACUD red accent. Dark = premium black with a lighter red.
-   Every colour is a CSS variable so the whole UI restyles from here.
+   Madkour AI Panel Inspector — design tokens
+   Dark by default: a graphite control-room canvas with an engineering-blue
+   accent and amber signal colour, chosen to read like switchgear instrumentation
+   rather than a consumer app. The palette is original — inspired by industrial
+   electrical equipment, not copied from any brand asset.
+   A light theme is available via the navbar toggle for printed reports and
+   bright plant rooms. Every colour is a CSS variable, so the whole UI restyles
+   from this block.
    ===================================================================== */
 :root {
-  --bg: 247 247 247;          /* #F7F7F7 page canvas */
-  --surface: 255 255 255;     /* #FFFFFF cards        */
-  --surface-2: 243 244 246;   /* subtle chips / inset */
-  --border: 232 232 232;      /* #E8E8E8              */
-  --text: 34 34 34;           /* #222222              */
-  --muted: 102 102 102;       /* #666666              */
-  --faint: 153 153 153;       /* #999999              */
-  --brand: 214 32 39;         /* #D62027              */
-  --ring: 214 32 39;
-  --success: 46 125 50;       /* #2E7D32 */
-  --warning: 249 168 37;      /* #F9A825 */
-  --danger: 198 40 40;        /* #C62828 */
+  /* dark is the default theme; .light overrides below */
+  --bg: 12 15 20;             /* #0C0F14 graphite canvas       */
+  --surface: 21 26 34;        /* #151A22 instrument panel      */
+  --surface-2: 29 36 46;      /* #1D242E inset / chips         */
+  --border: 42 52 65;         /* #2A3441 machined edge         */
+  --text: 231 238 246;
+  --muted: 146 160 178;
+  --faint: 104 118 136;
+  --brand: 45 140 220;        /* #2D8CDC engineering blue      */
+  --accent: 240 173 46;       /* #F0AD2E signal amber          */
+  --ring: 45 140 220;
+  --success: 61 199 138;      /* #3DC78A run / healthy         */
+  --warning: 240 173 46;      /* #F0AD2E advisory              */
+  --danger: 236 86 86;        /* #EC5656 trip / fault          */
 }
-.dark {
-  --bg: 15 15 15;             /* #0F0F0F */
-  --surface: 26 26 26;        /* #1A1A1A */
-  --surface-2: 34 34 34;      /* #222222 */
-  --border: 48 48 48;         /* #303030 */
-  --text: 240 240 240;
-  --muted: 168 168 168;
-  --faint: 120 120 120;
-  --brand: 230 76 80;
-  --ring: 230 76 80;
-  --success: 102 187 106;
-  --warning: 255 202 40;
-  --danger: 239 83 80;
+.light {
+  --bg: 240 243 247;
+  --surface: 255 255 255;
+  --surface-2: 236 240 245;
+  --border: 214 221 231;
+  --text: 22 30 40;
+  --muted: 89 101 117;
+  --faint: 138 149 164;
+  --brand: 21 101 170;
+  --accent: 190 124 12;
+  --ring: 21 101 170;
+  --success: 25 145 95;
+  --warning: 176 116 12;
+  --danger: 198 48 48;
 }
 
 @layer base {

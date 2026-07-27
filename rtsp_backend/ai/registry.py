@@ -46,6 +46,9 @@ def catalog() -> dict[str, list[dict]]:
                 "backend_id": cls.backend_id,
                 "display_name": cls.display_name,
                 "requires_weights": getattr(cls, "requires_weights", False),
+                "deprecated": getattr(cls, "deprecated", False),
+                "experimental": getattr(cls, "experimental", False),
+                "warning": getattr(cls, "warning", None),
             }
             for cls in backends.values()
         ]

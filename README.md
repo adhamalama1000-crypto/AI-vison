@@ -1,15 +1,72 @@
-# AI Human Vision
+# Madkour AI Panel Inspector
 
-> **Frontend:** AI Human Vision ships a premium, ACUD-inspired corporate
-> dashboard — light-by-default (with a dark theme), ACUD red (`#D62027`) accent,
-> the Inter typeface (bundled, offline-safe), a white sidebar with red-active
-> navigation, a glass top navbar (logo, notifications, profile, theme toggle),
-> a branded loading splash and sign-in screen, and soft-shadowed rounded cards,
-> enterprise tables and animated forms throughout. The React source lives in
-> `frontend/`; the production build is served by the backend at `/app/`. The
-> brand mark is an original placeholder in `frontend/src/components/Logo.tsx`
-> and `frontend/public/logo.svg` — drop in your own logo file to replace it.
+**Industrial electrical intelligence for control-panel inspection** — recognises
+industrial components, understands what a panel is *for*, and reports it the way
+an engineer would. Face recognition and the live-camera platform it grew out of
+are fully retained.
 
+> **Read this first if you are evaluating the AI:**
+> [`docs/AUDIT_PANEL_INSPECTOR.md`](docs/AUDIT_PANEL_INSPECTOR.md) — the root-cause
+> audit of the previous system (why it reported hundreds of phantom wires and
+> zero components), what was rebuilt, and the measured before/after numbers. It
+> is also explicit about what is **not** proven: no trained component checkpoint
+> ships with this repository, so the recogniser reports zero components until you
+> supply one. Nothing is fabricated to fill that gap.
+
+### What the inspector does
+
+- **Recognises 53 classes of industrial electrical component** — PLC, HMI,
+  contactor, relay, safety/timer/overload relay, MCB, MCCB, ACB, RCCB, RCBO,
+  fuse & holder, VFD, soft starter, servo drive, power supply, transformer,
+  CT/VT, terminal blocks, busbars, push buttons, E-stop, selector switch,
+  indicator lamps, cooling fans, DIN rail, cable duct, ethernet switches,
+  industrial routers, IO modules, signal isolators, sensors, encoders, limit
+  switches, power/energy meters and more — each with engineering function,
+  geometric priors and zero-shot prompts declared in
+  `rtsp_backend/electrical/taxonomy.py`.
+- **Counts and locates** every device: class, confidence, bounding box, centre,
+  3×3 panel position, DIN-rail row and position within the row.
+- **Reads nameplates** — 90 manufacturer part-number signatures (Schneider,
+  Siemens, ABB, Eaton, Omron, Mitsubishi, Phoenix Contact, WAGO, Weidmüller,
+  Pilz, MEAN WELL and others) resolve a detection to a manufacturer and product
+  family, and cross-check it against the detector's class.
+- **Classifies the panel** from its component composition — Motor Control Centre,
+  VFD/Drive Panel, PLC Automation Cabinet, Distribution Panel, Main LV
+  Switchboard, ATS Panel, Power-Factor Correction, Lighting Control, Metering,
+  Junction/Marshalling, Safety Control, Single Motor Starter — with the evidence
+  that produced the verdict, and an honest `unclassified` when the evidence is
+  thin.
+- **Infers the controlled process** (pumping, HVAC, material handling,
+  compressed air, standby generation, lighting…) from composition and panel text.
+- **Reports like an inspector**: Inspection Summary · Panel Type · Detected
+  Components · Component Count · Possible Function · Possible Missing Components
+  · Potential Maintenance Notes · Confidence Statistics · Inspection Time.
+- **Never guesses.** Below a per-class confidence threshold a detection is kept
+  but reported as **Unknown Industrial Component**; below the floor it is dropped.
+- **No wiring detection.** It was removed by design: the classical tracer
+  labelled cabinet seams, rail edges and shadows as wires — measured at 715 and
+  4 494 false positives over 25 wire-free panels — and swamped the component
+  result. See the audit.
+
+### Quick start with the AI
+
+```bash
+python -m training.electrical.cli plan                 # taxonomy, data sources, capabilities
+python scripts/validate_panel_inspector.py             # reproduce the audit's numbers
+python -m training.electrical.cli synth --out data/synth --crops data/crops
+python -m training.electrical.cli train --data data/synth/dataset.yaml --install
+```
+
+Full procedure: [`training/electrical/README.md`](training/electrical/README.md).
+
+> **Frontend:** an industrial control-room dashboard — dark by default (light
+> theme available), engineering-blue (`#2D8CDC`) accent with signal amber, the
+> Inter typeface (bundled, offline-safe), machined card elevation, a glass top
+> navbar and smooth animations throughout. The React source lives in `frontend/`;
+> the production build is served by the backend at `/app/`. The brand mark in
+> `frontend/src/components/Logo.tsx` and `frontend/public/logo.svg` is **original
+> artwork** — a DIN rail carrying modular devices — not a reproduction of any
+> Madkour brand asset. Drop in your own logo file to replace it.
 
 An RTSP camera backend extended into a full **AI vision platform**: live camera
 ingestion, a pluggable AI subsystem (face recognition, object/component
@@ -86,22 +143,30 @@ call, postprocessing, visualization, persistence, API, UI) but it returns
   a `.onnx` into `models/detection/` and select the `onnx_yolo` backend to get
   real COCO detections. Without weights it reports `no_weights` and detects
   nothing.
-- **Electrical component detection** (circuit breakers, MCB/MCCB, contactors,
-  relays, PLC modules, busbars, VFDs, …). No suitable public pretrained model
-  covers these classes, so **this cannot be validated here**. The ONNX pipeline,
-  the 18-class label set, the DB tables, the API, and the UI are all complete;
-  drop a trained `models/components/*.onnx` (plus an optional `labels.txt`) to
-  activate it.
-- **Wire analysis / topology** — instance-level wire tracing and fault
-  classification (broken / loose / disconnected / incorrect) is at the frontier
-  of computer vision and **has no reliable public model**, so it is not faked.
-  A real classical baseline (`classical_wires`) detects wire-like line segments
-  and links endpoints to nearby components, but honestly reports each wire's
-  fault status as `"unknown"`. The topology data model, DB, visualization, and
-  API are complete for a future trained model to populate.
-- **Component-to-wire relationship / electrical-path validation** — the data
-  model (each wire carries `from_component` / `to_component`) and the topology
-  endpoint exist; meaningful validation depends on the two trained models above.
+- **Industrial component recognition** — the whole engine around it is complete
+  and tested (taxonomy, decoding, suppression cascade, nameplate reading, panel
+  understanding, reporting, metrics, training pipeline). What is missing is a
+  **trained checkpoint**: no public pretrained model covers these classes, and
+  none could be trained in the environment this was built in (no GPU, no network
+  route to dataset hosts). Until you supply one, the recogniser reports
+  `weights_missing` and returns **zero components** — never an invented one.
+  Two ways to get to non-zero recognition:
+  - train your own — `training/electrical/README.md`, then
+    `python -m training.electrical.cli train --install`;
+  - or select a **zero-shot open-vocabulary** backend (`openvocab_owlv2`,
+    `openvocab_grounding_dino`, `openvocab_florence2`) on the AI Models page.
+    These need no dataset — they are driven by the taxonomy's engineer-phrased
+    prompts — but they need `torch` + `transformers` and access to the model hub.
+- **Wire analysis / topology — REMOVED BY DESIGN, not pending.** The classical
+  tracer keyed off image gradients and colour, so on a real panel it labelled
+  cabinet seams, DIN-rail edges, device outlines, duct lips, label borders and
+  shadows as "wires" (measured: 715 and 4 494 false positives across 25
+  *wire-free* panels) while missing the real conductors inside the ducting. The
+  `wires` task now defaults to `null_wires` and is disabled; a persisted legacy
+  selection is migrated away on startup. Both tracers remain registered as
+  `experimental` for research only. Wire analysis returns when there is a
+  trained, quantitatively validated instance-segmentation model behind it.
+  Details and numbers: [`docs/AUDIT_PANEL_INSPECTOR.md`](docs/AUDIT_PANEL_INSPECTOR.md).
 - **Real ArcFace face recognition** — the `insightface_arcface` backend uses the
   InsightFace library when it and its models are available. In an environment
   without them it reports `unavailable` and the manager keeps using the tested
@@ -161,8 +226,17 @@ rtsp_backend/
     registry.py          plugin registry (@register by task)
     embedders.py         opencv_fallback (tested) + insightface_arcface (real, optional)
     detectors.py         onnx_yolo (real ONNX) + null
-    components.py        onnx_components (real ONNX) + null_components
-    wires.py             classical_wires (real baseline) + null_wires
+    components.py        onnx_components (DEPRECATED) + null_components
+    wires.py             classical_wires / advanced_wires (EXPERIMENTAL, off) + null_wires
+  electrical/            industrial electrical intelligence (the panel inspector)
+    taxonomy.py          53-class domain knowledge base: function, priors, prompts
+    postprocess.py       FP-suppression cascade + honest "unknown" gate
+    recognizer.py        industrial_onnx / _ultralytics / openvocab_* / ensemble
+    nameplate.py         manufacturer + part-number identification from OCR text
+    expert.py            per-component engineering record, bill of materials
+    panel_type.py        panel-type & function inference, missing-component rules
+    inspector.py         the inspection engine + report builder
+    metrics.py           P/R/F1/mAP, confusion matrix, FP-FN analysis, threshold tuning
     face_service.py      enrol / persist / cosine match / threshold
     manager.py           AIModelManager: select/enable/params, metrics, persistence
     pipeline.py          per-frame inference, overlays, event + detection logging

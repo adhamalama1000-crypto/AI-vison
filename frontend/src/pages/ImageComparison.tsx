@@ -89,7 +89,7 @@ export default function ImageComparison() {
         <>
           <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
             <Card className="flex flex-col items-center justify-center p-5 text-center">
-              <RadialGauge value={result.similarity} max={100} label="Similarity" unit="%" color="#D62027" />
+              <RadialGauge value={result.similarity} max={100} label="Similarity" unit="%" color="#2D8CDC" />
               <div className="mt-2 flex items-center gap-2">
                 <StatusIcon s={result.status} />
                 <span className="text-lg font-bold capitalize">{result.status}</span>

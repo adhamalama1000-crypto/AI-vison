@@ -39,7 +39,7 @@ const NAV = [
     { to: "/datasets", label: "Electrical Dataset", icon: Database },
     { to: "/training", label: "Training", icon: GitCompare },
     { to: "/reference", label: "Reference Design", icon: Layers },
-    { to: "/panel", label: "Panel Analysis", icon: ScanLine },
+    { to: "/panel", label: "Panel Inspector", icon: ScanLine },
     { to: "/inspection", label: "Inspection", icon: ClipboardCheck },
   ]},
   { section: "System", items: [
@@ -67,7 +67,7 @@ export function Layout({ children }: { children: ReactNode }) {
       open ? "translate-x-0" : "-translate-x-full",
     )}>
       <div className="flex items-center gap-3 border-b px-5 py-4">
-        <Logo size={38} subtitle="Vision Platform" textClassName="text-[15px]" />
+        <Logo size={38} textClassName="text-[15px]" />
         <button className="ml-auto lg:hidden text-muted" onClick={() => setOpen(false)} aria-label="Close menu">
           <X className="h-5 w-5" />
         </button>
@@ -99,7 +99,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <span className="flex items-center gap-2 text-xs font-semibold"><Dot tone={conn.tone} pulse={state === "live"} /> {conn.text}</span>
           <span className="text-[11px] text-muted">{health ? `${health.cameras_connected}/${health.cameras_total} cams` : "—"}</span>
         </div>
-        <p className="mt-3 text-center text-[10px] text-faint">AI Human Vision · v5.0</p>
+        <p className="mt-3 text-center text-[10px] text-faint">Madkour AI Panel Inspector · v5.0</p>
       </div>
     </aside>
   );
@@ -196,7 +196,7 @@ function ProfileMenu() {
               <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand-600 text-sm font-bold text-white">OP</span>
               <div className="min-w-0">
                 <p className="truncate text-sm font-bold">Operator</p>
-                <p className="truncate text-[11px] text-muted">AI Human Vision</p>
+                <p className="truncate text-[11px] text-muted">Madkour AI Panel Inspector</p>
               </div>
             </div>
             <div className="my-1 border-t" />
@@ -234,7 +234,7 @@ function titleForPath(p: string): { label: string; sub: string } {
   if (p.startsWith("/topology")) return { label: "Topology Viewer", sub: "Component / terminal / wire electrical graph" };
   if (p.startsWith("/datasheets")) return { label: "Datasheets", sub: "OCR schematics into an expected wiring graph" };
   if (p.startsWith("/reference")) return { label: "Reference Design", sub: "Reference designs & expected specifications" };
-  if (p.startsWith("/panel")) return { label: "Panel Analysis", sub: "Component & wiring analysis of control panels" };
+  if (p.startsWith("/panel")) return { label: "Panel Inspector", sub: "Industrial component recognition, panel-type understanding & reporting" };
   if (p.startsWith("/inspection")) return { label: "Inspection", sub: "Compare panels against reference designs" };
   if (p.startsWith("/reports")) return { label: "Reports", sub: "Generated analysis & inspection reports" };
   if (p.startsWith("/models")) return { label: "AI Models", sub: "Model configuration & live metrics" };

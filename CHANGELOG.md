@@ -1,5 +1,140 @@
 # Changelog
 
+## [5.1.0] — Madkour AI Panel Inspector: component recognition redesign
+
+The panel-inspection AI has been rebuilt rather than tuned. The previous system
+reported hundreds of phantom wires and zero components; that was the exact,
+predictable output of the configuration that shipped. Full root-cause analysis
+with reproducible before/after numbers:
+[`docs/AUDIT_PANEL_INSPECTOR.md`](docs/AUDIT_PANEL_INSPECTOR.md).
+
+### Removed: wiring detection
+
+- The `wires` task now defaults to **`null_wires`** and is **disabled**. A
+  persisted `advanced_wires` / `classical_wires` selection is **migrated away on
+  startup** and reported in `GET /api/ai/status` — an existing installation stops
+  producing phantom wires on upgrade with no operator action.
+- Measured on 25 synthetic panels containing **zero** conductors:
+  `advanced_wires` reported **715** false wires (28.6/image, worst 57);
+  `classical_wires` reported **4 494** (179.8/image, hitting its own 200-line
+  cap). Precision 0.00. The redesigned path reports **0**.
+- `panel_svc.analyze` has no wire stage; results carry
+  `wire_analysis: {enabled: false, reason: …}` so the decision is stated, not
+  silently zero.
+- `panels/template.py` (reference-panel learning) no longer traces wires unless
+  `RTSP_ENABLE_WIRE_TRACING=1` or `wire_params={"enabled": True}`.
+- Both tracers stay registered and flagged `experimental` with a warning string
+  surfaced in the backend catalogue — research reproducibility, not product use.
+
+### Fixed: three defects that made a trained model useless
+
+- **Label shift.** The ONNX decoder chose its output format from the raw column
+  count (`>= 85` meant YOLOv5), true only for an 80-class COCO model. Every
+  electrical class set fell below it, so objectness was read as class 0 and every
+  label shifted by one. Measured label accuracy with the 53-class taxonomy:
+  **0.017 → 1.000**. Format is now resolved from the declared class count.
+- **`models/components/labels.txt` contained the lines `0`–`9`**, and was
+  preferred over the class list — components would have been named `"0"`…`"9"`.
+  Deleted; replaced by generated `models/components/classes.json`, pinned by a test.
+- **Class-agnostic NMS.** One NMS across all classes suppressed genuinely stacked
+  devices (an overload relay bolted under its contactor, a CT around a busbar).
+  NMS is now per class, with cross-class dedupe restricted to confusable groups.
+
+Also fixed: per-row Python decode loop (now vectorised), boxes never clipped to
+the frame, a `np.squeeze` that silently dropped **single**-detection outputs, and
+missing RT-DETR support.
+
+### New: `rtsp_backend/electrical/`
+
+- `taxonomy.py` — **53 industrial component classes**, each with engineering
+  function, panel role, electrical domain, mounting style, aspect-ratio and
+  relative-area priors, dataset aliases, zero-shot prompts and a per-class
+  confidence threshold. Ambiguous labels (`"circuit breaker"`) deliberately do
+  **not** resolve — they become unknown rather than a guess.
+- `postprocess.py` — six-stage suppression cascade (sanitise → per-class NMS →
+  confusable cross-class dedupe → geometric plausibility → confidence gate with
+  **Unknown Industrial Component** demotion → DIN-rail row grouping), with
+  per-stage drop accounting exposed in the API and UI. Measured against the old
+  logic: false positives **505 → 66 (−86.9 %)**, precision **0.591 → 0.916**,
+  F1 **0.673 → 0.834**; recall −0.016 and mAP@50 −0.012 are the accepted trade.
+- `recognizer.py` — `industrial_onnx`, `industrial_ultralytics`, and **zero-shot**
+  `openvocab_owlv2` / `openvocab_grounding_dino` / `openvocab_florence2` driven by
+  the taxonomy prompts (no dataset needed), plus a corroboration-weighted
+  `industrial_ensemble`.
+- `nameplate.py` — **90 manufacturer part-number signatures** across 21
+  manufacturers → manufacturer, product family, and a cross-check against the
+  detector's class. A disagreement is reported, not hidden.
+- `expert.py` — per-component engineering record with context-sensitive purpose (a
+  contactor next to an overload relay is a motor starter; next to capacitors it is
+  a PFC stage), bill of materials, row layout description.
+- `panel_type.py` — **12 panel archetypes** as weighted evidence rules, expected-BOM
+  gap analysis, and 12 engineering maintenance checks. Measured: **12/12** top-1 on
+  engineered inventories, **4/4** honest refusals on ambiguous ones.
+- `inspector.py` — the engine and the report builder (all nine required sections).
+- `metrics.py` — precision/recall/F1, AP, mAP@50, mAP@50-95, confusion matrix with
+  background row **and** column, false-positive cause analysis, false-negative
+  analysis, per-class threshold optimiser, model comparison table.
+
+### New: `training/electrical/`
+
+- `datasets.py` — public-source registry with per-source label maps, YOLO
+  label-space remapping onto the taxonomy (unmappable classes **dropped with a
+  count**, never folded), multi-dataset merge, trainability/coverage report, and
+  the Madkour field-capture protocol.
+- `synthetic.py` — labelled data generation: composition from real device crops
+  (the useful mode) and procedural stand-ins, with lighting, perspective,
+  rotation, occlusion, dust, shadow, reflection, blur and JPEG artefacts. Every
+  manifest records whether the data is real-sourced or procedural.
+- `train.py` — Ultralytics driver for YOLOv11 / YOLOv8 / RT-DETR (and YOLOv12
+  **only if the installed build exposes it** — otherwise `skipped`, never
+  substituted), panel-specific augmentation (no horizontal mirroring, 960 px,
+  `close_mosaic`), ONNX export with a pinned class map, and an architecture
+  benchmark ranked on measured mAP.
+- `cli.py` — `plan · synth · remap · merge · analyse · train · bench · eval · tune`.
+
+### New: validation harness
+
+`scripts/validate_panel_inspector.py` reproduces every number above. It also
+states its own limits: it validates the pipeline on exact ground truth and does
+**not** measure real-world accuracy on Madkour panels.
+
+### API
+
+- `GET /api/components/classes` now returns the full taxonomy, not a bare list.
+- `GET /api/components/panel-types` — the archetypes and their evidence rules.
+- `GET /api/components/nameplate-catalogue` — manufacturer signature coverage.
+- `GET /api/ai/status` reports `migrations`, and each backend carries
+  `deprecated` / `experimental` / `warning`.
+- `POST /api/panels/analyze` returns panel type, function, application, bill of
+  materials, missing components, maintenance notes, gate diagnostics and the
+  full report alongside the legacy keys.
+
+### UI — renamed to **Madkour AI Panel Inspector**
+
+- Industrial control-room redesign: **dark by default** (light theme retained),
+  engineering-blue `#2D8CDC` with signal amber, machined card elevation, DIN-rail
+  texture, scan-sweep and count-up animations.
+- New **Panel Inspector** page: annotated panel, panel-type verdict with
+  confidence bar and evidence, layout rows, bill of materials, an expandable
+  component table (class · confidence · bbox · centre · row/position, expanding to
+  function, purpose, manufacturer, part number, nameplate text), possible missing
+  components, maintenance notes, confidence statistics and the detection-gate
+  breakdown.
+- Original brand mark (a DIN rail carrying modular devices) — no Madkour brand
+  asset is reproduced.
+- Fixed: a loaded-but-disabled AI task was badged "ready", which read as running.
+
+### Face recognition
+
+Unchanged and fully functional. The entire pre-existing face suite passes.
+
+### Tests
+
+340 → 400+ tests. New: `test_electrical_taxonomy.py`,
+`test_electrical_postprocess.py`, `test_electrical_intelligence.py`,
+`test_electrical_recognizer.py`, `test_electrical_training.py`, plus startup
+migration coverage in `test_ai_manager.py`.
+
 ## [5.0.0] — Real production face recognition (SCRFD → ArcFace → cosine)
 
 The face pipeline has been rebuilt around the **real InsightFace models** and
