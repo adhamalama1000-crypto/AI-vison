@@ -22,9 +22,9 @@ export function LoadingScreen({ fading = false }: { fading?: boolean }) {
         </div>
         <div className="text-center">
           <h1 className="text-2xl font-extrabold tracking-tight">
-            AI Human <span className="text-brand-600">Vision</span>
+            MADKOUR <span className="text-brand-400">AI</span>
           </h1>
-          <p className="mt-1 text-sm text-muted">AI-Powered Human Vision Platform</p>
+          <p className="mt-1 text-sm text-muted">Panel Inspector · Industrial Electrical Intelligence</p>
         </div>
         <Spinner className="h-5 w-5 text-brand-600" />
       </div>

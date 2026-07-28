@@ -1,5 +1,30 @@
 # Industrial Panel Inspection
 
+
+> ## ⚠️ Wire tracing is OFF by default
+>
+> Everything in this document that involves **wires** is now opt-in and
+> experimental. The classical tracer keys off image gradients and colour, so on a
+> real panel it labels cabinet seams, DIN-rail edges, device outlines, cable-duct
+> lips, label borders and shadows as wires — measured at **715** and **4 494**
+> false positives across 25 *wire-free* panels — while missing the real
+> conductors, which are largely occluded inside ducting.
+>
+> Template learning and comparison therefore run on **components, terminals and
+> geometry only** unless you explicitly opt in:
+>
+> ```bash
+> export RTSP_ENABLE_WIRE_TRACING=1          # research use only
+> ```
+>
+> …or pass `wire_params={"enabled": True}` per call. The wire fault types below
+> (`missing_wire`, `extra_wire`, …) are only produced when tracing is enabled.
+>
+> The supported inspection path is the **Madkour AI Panel Inspector**
+> (`rtsp_backend/electrical/`), which recognises components, classifies the panel
+> and reports on it — with no wire stage at all. See
+> [`AUDIT_PANEL_INSPECTOR.md`](AUDIT_PANEL_INSPECTOR.md).
+
 A production module that turns an electrical control panel into structured,
 comparable data: **learn** a reference panel from images, then **inspect** any
 live/uploaded panel against it and report wiring / component / terminal faults

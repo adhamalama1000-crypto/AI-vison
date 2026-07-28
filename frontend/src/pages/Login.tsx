@@ -5,7 +5,7 @@ import { Logo } from "../components/Logo";
 import { Spinner } from "../components/ui/primitives";
 
 /**
- * Branded sign-in screen for AI Human Vision.
+ * Branded sign-in screen for the Madkour AI Panel Inspector.
  *
  * The backend currently ships without an interactive login (access is an
  * optional API key at the reverse proxy), so this page is presentational: it
@@ -38,9 +38,9 @@ export default function Login() {
           <div className="flex flex-col items-center text-center">
             <Logo size={64} showText={false} />
             <h1 className="mt-5 text-2xl font-extrabold tracking-tight">
-              AI Human <span className="text-brand-600">Vision</span>
+              MADKOUR <span className="text-brand-400">AI</span>
             </h1>
-            <p className="mt-1 text-sm text-muted">AI-Powered Human Vision Platform</p>
+            <p className="mt-1 text-sm text-muted">Panel Inspector · Industrial Electrical Intelligence</p>
           </div>
 
           <form onSubmit={onSubmit} className="mt-8 space-y-4">
@@ -69,7 +69,7 @@ export default function Login() {
             Administrative Capital for Urban Development · Enterprise Vision Suite
           </p>
         </div>
-        <p className="mt-4 text-center text-xs text-muted">© {new Date().getFullYear()} AI Human Vision</p>
+        <p className="mt-4 text-center text-xs text-muted">© {new Date().getFullYear()} Madkour AI Panel Inspector</p>
       </div>
     </div>
   );

@@ -154,14 +154,25 @@ def test_build_graph_nodes_and_edges():
 def test_template_analyze_without_component_model():
     result = template.analyze_image(None, make_panel())
     assert result["component_total"] == 0          # no model => honest empty
-    assert result["wire_total"] >= 3
+    # wire tracing is off by default: it produced hundreds of false "wires"
+    assert result["wire_total"] == 0
+    assert any("wire tracing disabled" in n for n in result["notes"])
     assert result["terminal_total"] >= 1
     assert any("no trained component model" in n for n in result["notes"])
     assert result["graph"]["node_count"] >= 1
 
 
+def test_template_wire_tracing_opt_in_still_available():
+    """The experimental tracer must still be reachable for research, explicitly."""
+    result = template.analyze_image(None, make_panel(),
+                                    wire_params={"enabled": True})
+    assert result["wire_total"] >= 1
+    assert any("explicitly enabled" in n for n in result["notes"])
+
+
 def test_build_template_multi_image():
-    built = template.build_template(None, [make_panel(), make_panel()])
+    built = template.build_template(None, [make_panel(), make_panel()],
+                                    wire_params={"enabled": True})
     tmpl = built["template"]
     assert tmpl["n_images"] == 2
     assert tmpl["wires"]
@@ -178,8 +189,10 @@ def test_compare_identical_passes():
 
 
 def test_compare_missing_wire_detected():
-    built = template.build_template(None, [make_panel()])
-    obs = template.analyze_image(None, make_panel(drop_green=True))
+    """Wire comparison is experimental and opt-in; exercise it explicitly."""
+    on = {"enabled": True}
+    built = template.build_template(None, [make_panel()], wire_params=on)
+    obs = template.analyze_image(None, make_panel(drop_green=True), wire_params=on)
     result = comparison.compare(tmpl := built["template"], obs, make_panel(drop_green=True),
                                 built["features"])
     types = {e["error_type"] for e in result["errors"]}
@@ -191,8 +204,9 @@ def test_compare_missing_wire_detected():
 
 
 def test_compare_extra_wire_detected():
-    built = template.build_template(None, [make_panel()])
-    obs = template.analyze_image(None, make_panel(extra=True))
+    on = {"enabled": True}
+    built = template.build_template(None, [make_panel()], wire_params=on)
+    obs = template.analyze_image(None, make_panel(extra=True), wire_params=on)
     result = comparison.compare(built["template"], obs, make_panel(extra=True),
                                 built["features"])
     types = {e["error_type"] for e in result["errors"]}
@@ -200,8 +214,9 @@ def test_compare_extra_wire_detected():
 
 
 def test_overlay_renders():
-    built = template.build_template(None, [make_panel()])
-    obs = template.analyze_image(None, make_panel(drop_green=True))
+    on = {"enabled": True}
+    built = template.build_template(None, [make_panel()], wire_params=on)
+    obs = template.analyze_image(None, make_panel(drop_green=True), wire_params=on)
     result = comparison.compare(built["template"], obs, make_panel(drop_green=True),
                                 built["features"])
     img = overlay.draw_overlay(make_panel(drop_green=True), obs, result)

@@ -15,8 +15,18 @@ def test_registry_has_expected_backends():
     assert any(b["backend_id"] == "opencv_fallback" for b in cat["face"])
     assert any(b["backend_id"] == "insightface_arcface" for b in cat["face"])
     assert any(b["backend_id"] == "onnx_yolo" for b in cat["detection"])
-    assert any(b["backend_id"] == "onnx_components" for b in cat["components"])
-    assert any(b["backend_id"] == "classical_wires" for b in cat["wires"])
+    # the industrial recognisers are the supported component path
+    for bid in ("industrial_onnx", "industrial_ultralytics", "openvocab_owlv2",
+                "openvocab_grounding_dino", "openvocab_florence2",
+                "industrial_ensemble", "industrial_disabled"):
+        assert any(b["backend_id"] == bid for b in cat["components"]), bid
+    # the legacy component decoder stays registered but is flagged deprecated
+    legacy = [b for b in cat["components"] if b["backend_id"] == "onnx_components"]
+    assert legacy and legacy[0]["deprecated"] is True
+    # both classical wire tracers are flagged experimental
+    for bid in ("classical_wires", "advanced_wires"):
+        hit = [b for b in cat["wires"] if b["backend_id"] == bid]
+        assert hit and hit[0]["experimental"] is True, bid
 
 
 def test_manager_defaults_and_face_service(tmp_path):
@@ -132,5 +142,75 @@ def test_detection_autoloads_when_weights_present(tmp_path):
         assert st["backend"]["ready"] is True
         assert st["reason"] != "weights_missing"
         assert st["state"] in ("disabled", "loaded")  # ready, just not enabled yet
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
+# panel-inspector redesign: retired backends must be migrated away on startup
+# --------------------------------------------------------------------------- #
+
+def test_persisted_wire_tracer_is_migrated_and_disabled(tmp_path):
+    """An existing install must stop producing phantom wires after upgrade.
+
+    The old default (`advanced_wires`, enabled) reported hundreds of false wires
+    per frame. A persisted selection has to be migrated, not honoured.
+    """
+    import json
+    import time
+
+    dbpath = str(tmp_path / "legacy.db")
+    db = Database(dbpath)
+    try:
+        # simulate a v4 installation's persisted config
+        for task, backend, enabled, params in (
+            ("wires", "advanced_wires", 1, {"min_wire_len": 35}),
+            ("components", "onnx_components", 1, {"conf": 0.25, "iou": 0.45}),
+        ):
+            db.execute(
+                "INSERT INTO model_config(name, backend, enabled, params, updated_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+                "backend=excluded.backend, enabled=excluded.enabled, "
+                "params=excluded.params, updated_at=excluded.updated_at",
+                (task, backend, enabled, json.dumps(params), time.time()))
+    finally:
+        db.close()
+
+    db = Database(dbpath)
+    try:
+        mgr = AIModelManager(db, models_dir=str(tmp_path / "models"))
+        wires = mgr.task_status("wires")
+        assert wires["selected_backend"] == "null_wires"
+        assert wires["enabled"] is False
+        # the legacy component decoder is replaced by the industrial recogniser,
+        # but the task's enabled flag is respected — only wires is force-disabled
+        comps = mgr.task_status("components")
+        assert comps["selected_backend"] == "industrial_onnx"
+        assert comps["enabled"] is True
+        # the migration is reported rather than done silently
+        assert any("wires" in m for m in mgr.full_status()["migrations"])
+        assert any("components" in m for m in mgr.full_status()["migrations"])
+        # stale params from the retired backends are not carried over
+        assert "min_wire_len" not in (mgr._tasks["wires"].params or {})
+    finally:
+        db.close()
+
+    # the migration is persisted, so it happens once
+    db = Database(dbpath)
+    try:
+        mgr2 = AIModelManager(db, models_dir=str(tmp_path / "models"))
+        assert mgr2.task_status("wires")["selected_backend"] == "null_wires"
+        assert mgr2.full_status()["migrations"] == []
+    finally:
+        db.close()
+
+
+def test_default_wires_backend_is_disabled(tmp_path):
+    db = Database(str(tmp_path / "d.db"))
+    try:
+        mgr = AIModelManager(db, models_dir=str(tmp_path / "models"))
+        assert mgr.task_status("wires")["selected_backend"] == "null_wires"
+        assert mgr.is_enabled("wires") is False
+        assert mgr.task_status("components")["selected_backend"] == "industrial_onnx"
     finally:
         db.close()

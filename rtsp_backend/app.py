@@ -542,7 +542,7 @@ def build_app(settings: Optional[Settings] = None) -> FastAPI:
     # non-media file out of reach even though they live under data_dir.
     _MEDIA_SUBDIRS = {
         "snapshots", "employees", "panels", "inspections", "reports", "reference",
-        "datasheets",
+        "datasheets", "images",
     }
 
     @app.get("/api/media/{path:path}", tags=["media"])

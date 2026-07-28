@@ -74,8 +74,22 @@ def build_components_router(ctx) -> APIRouter:
 
     @r.get("/classes")
     async def component_classes():
-        from ..ai.components import ELECTRICAL_CLASSES
-        return {"classes": ELECTRICAL_CLASSES}
+        """The full industrial taxonomy: ids, names, engineering function and
+        the geometric/confidence priors the recogniser gates on."""
+        from ..electrical import taxonomy as tax
+        return {"classes": list(tax.CLASS_ORDER), "taxonomy": tax.summary()}
+
+    @r.get("/panel-types")
+    async def panel_types():
+        """The panel archetypes the classifier can infer, with their evidence."""
+        from ..electrical import panel_type
+        return panel_type.rule_summary()
+
+    @r.get("/nameplate-catalogue")
+    async def nameplate_catalogue():
+        """Manufacturer part-number signatures used for nameplate identification."""
+        from ..electrical import nameplate
+        return nameplate.catalogue_summary()
 
     @r.get("/summary")
     async def component_summary():

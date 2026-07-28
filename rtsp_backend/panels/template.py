@@ -9,7 +9,13 @@ template describing what the panel should look like:
   orientation of the component's content (``minAreaRect``), so a
   "wrong rotation" fault is later detectable.
 * **Terminals** — every terminal-block / screw / entry point.
-* **Wires** — full instance geometry from the real wire detector.
+* **Wires** — OFF BY DEFAULT. Classical wire tracing keyed off image gradients
+  and colour, so on a real panel it labelled cabinet seams, DIN-rail edges,
+  device outlines, duct lips and shadows as wires (hundreds per image) while
+  missing the actual conductors inside the ducting. The template therefore
+  learns components + terminals + geometry, and the wire list stays empty unless
+  wire tracing is explicitly enabled — see :data:`WIRE_TRACING_ENV` and
+  ``docs/AUDIT_PANEL_INSPECTOR.md``.
 * **Graph** — the electrical connection graph.
 * **Feature embedding** — ORB descriptors + colour histogram of the primary
   image for later registration.
@@ -33,6 +39,29 @@ from . import features as _features
 from . import graph as _graph
 from .terminal_detector import detect_terminals
 from .wire_detector import detect_wires
+
+#: Set to ``1``/``true`` to re-enable the experimental classical wire tracer.
+WIRE_TRACING_ENV = "RTSP_ENABLE_WIRE_TRACING"
+
+WIRE_TRACING_DISABLED_NOTE = (
+    "wire tracing disabled — the classical tracer reports panel seams, rail "
+    "edges, device outlines and shadows as wires, so it is not used for "
+    "inspection output. Set RTSP_ENABLE_WIRE_TRACING=1 (research only) or pass "
+    "wire_params={'enabled': True} to re-enable it."
+)
+
+
+def wire_tracing_enabled(wire_params: Optional[dict] = None) -> bool:
+    """Whether the experimental classical wire tracer may run.
+
+    Explicit per-call ``wire_params['enabled']`` wins over the environment, so a
+    research script can opt in without changing global configuration.
+    """
+    import os
+    if wire_params is not None and "enabled" in wire_params:
+        return bool(wire_params["enabled"])
+    return str(os.environ.get(WIRE_TRACING_ENV, "")).strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def _grid_position(cx: float, cy: float, shape) -> str:
@@ -99,8 +128,17 @@ def analyze_image(ai_manager, image_bgr: np.ndarray,
     # -- terminals ---------------------------------------------------------
     terminals = [t.to_dict() for t in detect_terminals(image_bgr, comps)]
 
-    # -- wires -------------------------------------------------------------
-    wires = [wnode.to_dict() for wnode in detect_wires(image_bgr, comps, terminals, wire_params)]
+    # -- wires (disabled by default; see module docstring) ------------------
+    if wire_tracing_enabled(wire_params):
+        params = {k: v for k, v in (wire_params or {}).items() if k != "enabled"}
+        wires = [wnode.to_dict()
+                 for wnode in detect_wires(image_bgr, comps, terminals, params)]
+        notes.append("wire tracing explicitly enabled — geometry is real but "
+                     "high in false positives; do not treat it as a wiring "
+                     "verdict.")
+    else:
+        wires = []
+        notes.append(WIRE_TRACING_DISABLED_NOTE)
 
     # -- graph -------------------------------------------------------------
     g = _graph.build_graph(comps, terminals, wires)

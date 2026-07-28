@@ -13,6 +13,8 @@ import type {
   InspectionResultRow, InspectionResultsResponse,
   DatasheetsResponse, Datasheet, DatasheetExtract,
   FaceConfig, FaceConfigResponse, RecognitionsResponse, EmbeddingsResponse, RetrainResult,
+  ImagesResponse, ImageDetail, ImageUploadResult, ComparisonResult,
+  ComparisonsResponse, ImageHistory,
 } from "./types";
 
 async function parse<T>(res: Response): Promise<T> {
@@ -161,6 +163,17 @@ export const api = {
   uploadDatasheet: (form: FormData) => upload<Datasheet>("/api/datasheets/upload", form),
   extractDatasheet: (id: number) => req<DatasheetExtract>("POST", `/api/datasheets/${id}/extract`),
   deleteDatasheet: (id: number) => req<{ deleted: number }>("DELETE", `/api/datasheets/${id}`),
+
+  // ---- AI Image Analysis & Comparison ----
+  uploadImage: (form: FormData) => upload<ImageUploadResult>("/api/images/upload", form),
+  analyzeImage: (form: FormData) => upload<ImageDetail>("/api/images/analyze", form),
+  compareImages: (form: FormData) => upload<ComparisonResult>("/api/images/compare", form),
+  imagesList: () => req<ImagesResponse>("GET", "/api/images"),
+  imageDetail: (id: number) => req<ImageDetail>("GET", `/api/images/${id}`),
+  imageComparisons: () => req<ComparisonsResponse>("GET", "/api/images/comparisons"),
+  imageReport: (id: number) => req<ComparisonResult>("GET", `/api/images/report/${id}`),
+  imageHistory: () => req<ImageHistory>("GET", "/api/images/history"),
+  deleteImageRecord: (id: number) => req<{ deleted: number }>("DELETE", `/api/images/${id}`),
 
   // ---- Reports ----
   reports: (kind = "") => req<ReportsResponse>("GET", `/api/reports${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),

@@ -9,3 +9,12 @@ onnxruntime>=1.17
 psutil>=5.9
 python-multipart>=0.0.9
 reportlab>=4.0
+# Panel inspection + general image analysis/comparison:
+scikit-image>=0.22        # SSIM difference maps + wire skeletonisation
+imagehash>=4.3            # perceptual hashing for image similarity
+Pillow>=10.0              # image I/O for imagehash / OCR
+# Optional OCR engines for image + datasheet text extraction (auto-detected at
+# runtime; none required). Install ONE to enable OCR:
+#   pip install easyocr            # bundles CRNN weights (heavy, pulls torch)
+#   pip install paddleocr          # PP-OCR
+#   pip install pytesseract        # also needs the system `tesseract` binary

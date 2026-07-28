@@ -56,9 +56,19 @@ def _load_labels(models_dir: str) -> list[str]:
 class OnnxComponentDetector(_OnnxDetectorBase, ComponentDetector):
     backend_id = "onnx_components"
     task = "components"
-    display_name = "ONNX electrical-component detector (needs trained weights)"
+    display_name = ("ONNX electrical-component detector — DEPRECATED, "
+                    "use industrial_onnx")
     default_subdir = "components"
     requires_weights = True
+    deprecated = True
+    warning = (
+        "Superseded by 'industrial_onnx'. This decoder inferred the export "
+        "format from the raw column count, which shifts every class label for "
+        "any model that does not have exactly 80 classes, and it applies a "
+        "single class-agnostic NMS with one global confidence threshold and no "
+        "geometric sanity check. Kept only so an existing configuration keeps "
+        "loading. See docs/AUDIT_PANEL_INSPECTOR.md."
+    )
 
     def load(self) -> None:
         models_dir = self.params.get("models_dir", "models")

@@ -391,6 +391,84 @@ CREATE TABLE IF NOT EXISTS datasheets (
     FOREIGN KEY (panel_id) REFERENCES reference_panels(id) ON DELETE SET NULL
 );
 
+-- =====================================================================
+-- General AI Image Analysis & Comparison (any image, not just panels).
+-- Additive: nothing above is touched.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS images (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT,
+    path        TEXT NOT NULL,                     -- relative path under data dir
+    format      TEXT,                              -- jpg|png|...
+    width       INTEGER,
+    height      INTEGER,
+    bytes       INTEGER,
+    sha256      TEXT,                              -- dedupe / integrity
+    phash       TEXT,                              -- perceptual hash (hex)
+    dominant_colors TEXT,                          -- JSON list of {hex,ratio}
+    metadata    TEXT,                              -- JSON (exif-ish / channels)
+    summary     TEXT,                              -- AI summary sentence
+    tags        TEXT,                              -- JSON list
+    ocr_text    TEXT,                              -- concatenated OCR text
+    n_objects   INTEGER NOT NULL DEFAULT 0,
+    analysis    TEXT,                              -- JSON full analysis result
+    status      TEXT NOT NULL DEFAULT 'uploaded',  -- uploaded|analyzing|analyzed|error
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS image_objects (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id    INTEGER NOT NULL,
+    label       TEXT,
+    confidence  REAL,
+    x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+    source      TEXT,                              -- detector backend id
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS image_ocr (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id    INTEGER NOT NULL,
+    text        TEXT,
+    confidence  REAL,
+    x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+    engine      TEXT,
+    created_at  REAL NOT NULL,
+    FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS image_comparisons (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref_image_id  INTEGER,
+    cur_image_id  INTEGER,
+    similarity    REAL,                            -- 0..100 %
+    n_diffs       INTEGER NOT NULL DEFAULT 0,
+    status        TEXT,                            -- identical|minor|major
+    report        TEXT,                            -- JSON full comparison result
+    overlay_path  TEXT,                            -- side-by-side + heatmap image
+    heatmap_path  TEXT,
+    aligned_path  TEXT,
+    report_pdf    TEXT,
+    created_at    REAL NOT NULL,
+    FOREIGN KEY (ref_image_id) REFERENCES images(id) ON DELETE SET NULL,
+    FOREIGN KEY (cur_image_id) REFERENCES images(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS image_diffs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    comparison_id INTEGER NOT NULL,
+    diff_type     TEXT,                            -- missing_object|new_object|moved_object|color_change|text_change|region_changed...
+    severity      TEXT,                            -- info|minor|major
+    detail        TEXT,
+    confidence    REAL,
+    x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+    created_at    REAL NOT NULL,
+    FOREIGN KEY (comparison_id) REFERENCES image_comparisons(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type    ON events(type);
 CREATE INDEX IF NOT EXISTS idx_emb_employee   ON face_embeddings(employee_id);
@@ -403,6 +481,10 @@ CREATE INDEX IF NOT EXISTS idx_refwire_panel  ON reference_wires(panel_id);
 CREATE INDEX IF NOT EXISTS idx_refterm_panel  ON reference_terminals(panel_id);
 CREATE INDEX IF NOT EXISTS idx_inspres_panel  ON inspection_results(panel_id);
 CREATE INDEX IF NOT EXISTS idx_insperr_result ON inspection_errors(result_id);
+CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at);
+CREATE INDEX IF NOT EXISTS idx_imgobj_image  ON image_objects(image_id);
+CREATE INDEX IF NOT EXISTS idx_imgcmp_created ON image_comparisons(created_at);
+CREATE INDEX IF NOT EXISTS idx_imgdiff_cmp   ON image_diffs(comparison_id);
 """
 
 
