@@ -46,8 +46,9 @@ export function summaryText(s: unknown): string {
   if (typeof s === "object") {
     const o = s as Record<string, any>;
     const parts: string[] = [];
+    if (o.panel_type_name) parts.push(String(o.panel_type_name));
     if (o.component_total != null) parts.push(`${o.component_total} components`);
-    if (o.wire_total != null) parts.push(`${o.wire_total} wires`);
+    if (o.component_types != null) parts.push(`${o.component_types} types`);
     if (o.status != null) parts.push(String(o.status));
     if (o.n_mismatches != null) parts.push(`${o.n_mismatches} mismatch${o.n_mismatches === 1 ? "" : "es"}`);
     if (parts.length) return parts.join(" · ");

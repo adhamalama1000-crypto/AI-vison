@@ -163,8 +163,8 @@ function BoxOverlay({ src, detail }: { src: string; detail: ImageDetail }) {
         {detail.objects?.map((o, i) => (
           <g key={i}>
             <rect x={o.x1} y={o.y1} width={o.x2 - o.x1} height={o.y2 - o.y1}
-                  fill="none" stroke="#D62027" strokeWidth={Math.max(2, w / 300)} />
-            <text x={o.x1 + 3} y={o.y1 - 4} fontSize={Math.max(11, w / 45)} fill="#D62027" fontWeight="700">{o.label}</text>
+                  fill="none" stroke="#2D8CDC" strokeWidth={Math.max(2, w / 300)} />
+            <text x={o.x1 + 3} y={o.y1 - 4} fontSize={Math.max(11, w / 45)} fill="#2D8CDC" fontWeight="700">{o.label}</text>
           </g>
         ))}
       </svg>

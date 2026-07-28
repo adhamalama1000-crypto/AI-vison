@@ -19,6 +19,20 @@ results. Instead we ship:
 The topology data model, DB tables, visualisation, and API are complete, so a
 future trained wire model only needs to populate :class:`Wire` objects with
 per-instance status; nothing downstream changes.
+
+.. warning::
+
+   **Wiring analysis is disabled by default and is not part of the supported
+   inspection path.** Both classical tracers below key off generic image
+   gradients and colour, so in a real control panel they label cabinet seams,
+   DIN-rail edges, device outlines, cable-duct lips, label borders, shadows and
+   reflections as "wires" — routinely hundreds per frame — while missing the
+   actual conductors, which are largely occluded inside ducting. That noise
+   swamped the component result, so the platform no longer runs it.
+
+   These backends remain registered as *experimental* for research only. Wire
+   analysis will return when there is a trained, quantitatively validated
+   instance-segmentation model behind it. See ``docs/AUDIT_PANEL_INSPECTOR.md``.
 """
 
 from __future__ import annotations
@@ -60,8 +74,13 @@ def _dominant_color_name(bgr_patch: np.ndarray) -> str:
 class ClassicalWireAnalyzer(WireAnalyzer):
     backend_id = "classical_wires"
     task = "wires"
-    display_name = "Classical line/colour wire baseline (no weights, limited)"
+    display_name = ("Classical line/colour wire baseline — EXPERIMENTAL, "
+                    "high false-positive rate")
     requires_weights = False
+    experimental = True
+    warning = ("Hough line segments are not wires. On a real panel this emits "
+               "hundreds of false positives from seams, edges and shadows. "
+               "Research use only.")
 
     def load(self) -> None:
         self._ready = True
@@ -145,8 +164,14 @@ class AdvancedWireAnalyzer(WireAnalyzer):
 
     backend_id = "advanced_wires"
     task = "wires"
-    display_name = "Advanced classical wire detector (real geometry, no weights)"
+    display_name = ("Advanced classical wire detector — EXPERIMENTAL, "
+                    "high false-positive rate")
     requires_weights = False
+    experimental = True
+    warning = ("Colour-segmentation + skeletonisation over the whole frame. It "
+               "returns genuine line geometry but cannot tell a conductor from "
+               "a cabinet seam, so it is unfit for inspection output. "
+               "Research use only.")
 
     def load(self) -> None:
         # build the detector once, forwarding any tuning params

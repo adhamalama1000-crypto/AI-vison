@@ -81,7 +81,7 @@ export default function Dashboard() {
         <Card className="p-5">
           <SectionTitle title="System resources" />
           <div className="grid grid-cols-2 gap-2">
-            <RadialGauge value={data.resources.cpu_percent} label="CPU" color="#D62027" />
+            <RadialGauge value={data.resources.cpu_percent} label="CPU" color="#2D8CDC" />
             <RadialGauge value={data.resources.ram_percent} label="RAM" color="#111111" />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
@@ -118,9 +118,12 @@ export default function Dashboard() {
                   <p className="text-sm font-semibold capitalize">{task}</p>
                   <p className="text-[11px] text-muted">{t.backend}</p>
                 </div>
-                <Badge tone={t.enabled && t.ready ? "green" : t.ready ? "blue" : "gray"}>
-                  <Dot tone={t.enabled && t.ready ? "green" : t.ready ? "blue" : "gray"} />
-                  {t.enabled ? (t.ready ? "running" : "enabled") : (t.ready ? "ready" : "off")}
+                <Badge tone={t.enabled ? (t.ready ? "green" : "amber") : "gray"}>
+                  <Dot tone={t.enabled ? (t.ready ? "green" : "amber") : "gray"} />
+                  {/* A disabled task is "off" whether or not its backend loaded —
+                      reporting a loaded-but-disabled backend as "ready" reads as
+                      though it were running. */}
+                  {t.enabled ? (t.ready ? "running" : "loading") : "off"}
                 </Badge>
               </div>
             ))}

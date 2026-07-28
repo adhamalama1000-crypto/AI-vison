@@ -62,7 +62,10 @@ def test_get_missing_panel_404(client):
 # upload + learn + compare
 # --------------------------------------------------------------------------
 
-def test_upload_learn_compare_flow(client):
+def test_upload_learn_compare_flow(client, monkeypatch):
+    # The reference-panel wire diff is an experimental, opt-in feature since the
+    # classical tracer's false-positive rate made it unfit for default use.
+    monkeypatch.setenv("RTSP_ENABLE_WIRE_TRACING", "1")
     pid = client.post("/api/reference-panels", json={"name": "Main"}).json()["id"]
 
     # upload two images

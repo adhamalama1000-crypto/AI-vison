@@ -192,18 +192,115 @@ export interface ReferenceSpec {
 export interface ReferenceDetail extends ReferenceDesign { spec?: ReferenceSpec | null; }
 export interface ReferenceUploadResult { id: number; name: string; kind: string; path: string; }
 
-// ---- Panel analysis (Part 8) ----
-export interface PanelComponent { label: string; confidence: number | null; bbox: number[]; position: string | null; }
-export interface PanelWire { wire_uid: string; start: string | null; end: string | null; color: string | null; status: string | null; }
-export interface PanelResult {
-  components: PanelComponent[]; component_counts: Record<string, number>; component_total: number;
-  wires: PanelWire[]; wire_color_counts: Record<string, number>; wire_total: number;
-  topology: { nodes: number; edges: number }; notes: string[];
+// ---- Panel inspection (Madkour AI Panel Inspector) ----
+
+/** One fully-annotated component, as produced by electrical/expert.py. */
+export interface PanelComponent {
+  index: number;
+  class_id: string;
+  label: string;
+  title: string;
+  confidence: number;
+  confidence_pct: number;
+  bbox: number[];
+  center: number[];
+  position: string;
+  row: number | null;
+  row_position: number | null;
+  category: string;
+  domain: string;
+  function: string;
+  purpose: string;
+  mounting: string[];
+  manufacturer: string | null;
+  product_family: string | null;
+  part_number: string | null;
+  nameplate_text: string | null;
+  identification_basis: string;
+  notes: string[];
+  extra: Record<string, any>;
 }
+
+export interface BomEntry {
+  class_id: string; name: string; category: string; quantity: number;
+  mean_confidence: number; min_confidence: number; max_confidence: number;
+  manufacturers: string[]; function: string; indices: number[];
+}
+
+export interface PanelTypeCandidate {
+  id: string; name: string; confidence: number; score: number;
+  evidence: string[]; function: string; description: string;
+}
+
+export interface PanelClassification {
+  panel_type: string; panel_type_name: string; confidence: number;
+  function: string; evidence: string[];
+  candidates: PanelTypeCandidate[]; reason: string | null;
+}
+
+export interface ApplicationGuess {
+  application: string | null; confidence: number; evidence: string[];
+}
+
+export interface MissingComponent {
+  class_id: string; name: string; severity: string; rationale: string;
+}
+
+export interface MaintenanceNote { code: string; severity: string; message: string; }
+
+export interface ConfidenceStats {
+  count: number; mean: number | null; median: number | null;
+  min: number | null; max: number | null; below_0_5: number; unknown: number;
+}
+
+export interface GateDiagnostics {
+  input_count: number; output_count: number; dropped_total: number;
+  dropped_by_reason: Record<string, number>;
+  relabelled_unknown: number; suppression_rate: number;
+}
+
+export interface PanelResult {
+  engine: string;
+  engine_version: string;
+  image_size: number[];
+  components: PanelComponent[];
+  component_total: number;
+  component_counts: Record<string, number>;
+  component_counts_by_id?: Record<string, number>;
+  bill_of_materials: BomEntry[];
+  panel: PanelClassification;
+  application: ApplicationGuess;
+  missing_components: MissingComponent[];
+  maintenance_notes: MaintenanceNote[];
+  confidence: ConfidenceStats;
+  layout: { rows: number; description: string[] };
+  diagnostics: GateDiagnostics;
+  notes: string[];
+  ocr: { engine: string | null; item_count: number; note?: string | null };
+  /** Wiring detection is disabled by design; this states that explicitly. */
+  wire_analysis: { enabled: boolean; reason: string };
+  component_model_loaded?: boolean;
+  duration_ms?: number;
+  inspected_at?: number;
+  report?: Record<string, any>;
+  // legacy keys retained for older clients
+  wires: unknown[];
+  wire_total: number;
+  wire_color_counts: Record<string, number>;
+  topology?: { nodes: unknown; edges: unknown };
+}
+
 export interface PanelReport { id: number; title: string; path: string; summary: string | Record<string, any> | null; created_at: number; }
 export interface PanelsResponse { panels: PanelReport[]; total: number; }
 export interface PanelAnalyzeResult {
-  id: number; result: PanelResult; annotated: string | null; pdf: string | null; json: string | null;
+  id: number; result: PanelResult;
+  annotated: string | null; pdf: string | null; json: string | null;
+  panel_type?: string | null; panel_type_name?: string | null;
+  panel_type_confidence?: number | null; panel_function?: string | null;
+  application?: string | null; component_types?: number;
+  unknown_components?: number; mean_confidence?: number | null;
+  duration_ms?: number | null;
+  component_total: number; wire_total: number;
 }
 
 // ---- Inspection (Part 10) ----
