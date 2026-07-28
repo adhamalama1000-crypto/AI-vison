@@ -151,6 +151,10 @@ _SPECS: tuple[ComponentSpec, ...] = (
                  "an MCCB with an adjustable trip dial"),
         min_conf=0.40,
         aliases=("moulded_case_circuit_breaker", "molded_case_circuit_breaker",
+                 # the 'mould case' / 'mold case' spellings appear verbatim in
+                 # public datasets; without them the label would fall through to
+                 # the generic circuit_breaker class and lose its frame size.
+                 "mould_case_circuit_breaker", "mold_case_circuit_breaker",
                  "circuit_breaker_large", "breaker_mccb"),
         companions=("busbar", "current_transformer"),
     ),
@@ -932,6 +936,33 @@ _SPECS: tuple[ComponentSpec, ...] = (
         aliases=("gland", "gland_plate", "cable_entry"),
         companions=("terminal_block",),
     ),
+    # ---------------- generic / type-unspecified ----------------
+    # APPENDED (taxonomy 5.1). Every entry above this line keeps its index, so
+    # checkpoints trained against taxonomy 5.0 remain valid.
+    _spec(
+        id="circuit_breaker", name="Circuit Breaker (type unspecified)",
+        category="protection", domain="power",
+        function="A circuit breaker whose specific family (MCB / MCCB / ACB / "
+                 "VCB / SF6) is not determinable from the image. It interrupts "
+                 "fault current; the frame size and interrupting technology are "
+                 "not identified.",
+        role="Circuit protection, device family unresolved.",
+        mounting=("din_rail", "backplate", "enclosure"),
+        aspect_ratio=(0.1, 4.0), rel_area=(0.0004, 0.35),
+        prompts=("a circuit breaker in an electrical panel",
+                 "a switching device with a trip mechanism and an ON/OFF lever"),
+        min_conf=0.45,
+        aliases=("vacuum_circuit_breaker", "vaccum_circuit_breaker", "vcb",
+                 "sf6_circuit_breaker", "gas_insulated_circuit_breaker",
+                 "breaker", "cb"),
+        companions=("busbar", "current_transformer"),
+        notes="This is the honest home for the many public datasets that label "
+              "every protective device 'circuit breaker'. Prefer the specific "
+              "class (mcb / mccb / acb / rccb / rcbo) whenever the source "
+              "distinguishes them — a per-source label_map in "
+              "training.electrical.datasets should do that mapping explicitly "
+              "rather than letting a specific device collapse into this class.",
+    ),
 )
 
 # --------------------------------------------------------------------------
@@ -993,9 +1024,10 @@ def resolve(label: str) -> Optional[str]:
     # Loose matching accepts a label that is *more specific* than a known alias
     # ("schneider lc1d contactor" → contactor), longest alias first so
     # "overload relay" resolves to the overload relay rather than to a plain
-    # relay. It deliberately does NOT accept the reverse: a label vaguer than
-    # any alias ("circuit breaker" — MCB? MCCB? ACB? RCCB?) stays unresolved so
-    # the caller reports it as an unknown component instead of picking one.
+    # relay, and "miniature circuit breaker" resolves to the MCB rather than to
+    # the generic breaker class. It never invents specificity that the label
+    # does not carry: a bare "circuit breaker" resolves to the deliberately
+    # vague ``circuit_breaker`` class, never to MCB / MCCB / ACB / RCCB.
     for cand in sorted(_ALIAS_INDEX, key=len, reverse=True):
         if len(cand) >= 4 and cand in key:
             return _ALIAS_INDEX[cand]
@@ -1058,6 +1090,10 @@ _SHORT_OVERRIDES: dict[str, str] = {
     "thermostat": "Thermostat",
     "limit_switch": "Limit Sw",
     "ammeter": "Meter",
+    # "Circuit Breaker (type unspecified)" would render as "Circuit Breaker",
+    # which reads on an overlay as a confident identification. The trailing '?'
+    # keeps the uncertainty visible in the few characters an overlay has room for.
+    "circuit_breaker": "CB?",
     UNKNOWN_COMPONENT_ID: "Unknown",
 }
 

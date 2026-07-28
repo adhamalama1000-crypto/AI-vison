@@ -9,19 +9,25 @@ Everything here is driven from one entry point:
 python -m training.electrical.cli --help
 ```
 
-> **Where this repository stands.** No trained checkpoint ships with the code, and
-> none could be produced in the environment it was built in: no GPU, and no
-> network route to the dataset or model hubs. The recogniser therefore reports
-> `weights_missing` and returns **zero components** rather than inventing any.
-> This document is the procedure that closes that gap. See
-> `docs/AUDIT_PANEL_INSPECTOR.md` for exactly what is and is not proven.
+> **Where this repository stands.** No trained checkpoint ships with the code. The
+> pipeline is complete and tested; what is missing is **data**. A verified survey of
+> public sources (`cli plan`) finds ~3,500 usable images and only six taxonomy
+> classes reaching the 300-instance reliability bar, with six priority classes —
+> VFD, SMPS, busbar, DIN rail, cable duct, emergency stop — having **zero** public
+> instances. Closing that needs ~6,600 annotations ≈ ~550 labelled panel
+> photographs (`cli gap`). Until then the recogniser reports `weights_missing` and
+> returns **zero components** rather than inventing any.
+>
+> Full walkthrough and the capture plan: `docs/ELECTRICAL_MODEL_TRAINING.md`.
+> Deployment: `docs/PRODUCTION_DEPLOYMENT.md`.
+> What is and is not proven: `docs/AUDIT_PANEL_INSPECTOR.md`.
 
 ---
 
 ## 0. The label space
 
 Every dataset, checkpoint and export in this project shares one label space:
-`rtsp_backend.electrical.taxonomy.CLASS_ORDER` (53 classes).
+`rtsp_backend.electrical.taxonomy.CLASS_ORDER` (54 classes, taxonomy 5.1).
 
 - It is **append-only**. Inserting a class in the middle invalidates every
   previously trained checkpoint.
@@ -65,16 +71,24 @@ So the plan is three-legged:
 
 ### 1.2 Public datasets
 
-Search Roboflow Universe for `electrical panel`, `control panel components`,
-`switchgear`, `MCB detection`, `distribution board`. Individually the projects are
-too small; merged they cover the common classes. Download in YOLOv8 format, then
-remap onto the canonical label space:
+The search has been done. `datasets.SOURCES` holds **verified** locators —
+workspace/project/version, licence, image count and the per-class instance counts
+read off each upstream project — not placeholders. Fetch them:
+
+```bash
+export ROBOFLOW_API_KEY=...
+python -m training.electrical.cli download --all --dst data/raw
+```
+
+Each source is downloaded, its layout normalised, and its labels remapped onto the
+canonical space in one step. `remap` remains available for a dataset you obtained
+some other way:
 
 ```bash
 python -m training.electrical.cli remap \
   --src raw/rf_panel_1 --dst data/rf1 \
   --names-from raw/rf_panel_1/data.yaml \
-  --source-key rf_electrical_panel_components
+  --source-key rf_electrical_panel_imgpro
 ```
 
 `remap` resolves each source label through that source's declared label map and
@@ -83,8 +97,27 @@ listed on stderr** — never folded into a nearby class, because a wrong label i
 worse than a missing one. Read that list; it usually tells you the source has a
 class worth adding to the taxonomy.
 
-Check the licence of every project before using it commercially. The registry
-records what is known, but upstream terms change.
+What the survey actually found, and the three traps in it (one dataset that is a
+single panel photographed 256 times, two that are probably duplicates of each
+other, one that labels terminals per-pole instead of per-strip), is written up in
+`docs/ELECTRICAL_MODEL_TRAINING.md`. Two sources are recorded and deliberately
+**excluded**; the registry says why, so they are not rediscovered and merged.
+
+Every source's licence is in the registry and in `download_manifest.json`. Most are
+CC BY 4.0, which **requires attribution** — ship that manifest with the model.
+Upstream terms change; re-check before commercial use.
+
+### 1.2b Split before you train
+
+```bash
+python -m training.electrical.cli split --src data/merged --dst data/final
+```
+
+80/10/10, **grouped by capture** so multiple framings of one cabinet never straddle
+splits. This is not a detail: a random image-level split leaks near-duplicates into
+validation, and the resulting mAP is measuring memorisation. Pass `--groups
+groups.json` when the capture programme recorded panel ids, and check
+`leaking_groups == 0` and `classes_absent_from_val` in the report.
 
 ### 1.3 Vendor catalogue crops (highest value per hour)
 
@@ -309,16 +342,23 @@ set.**
 One pass is not a project. Iterate:
 
 ```
-1. analyse  → which classes are absent / weak?
-2. capture  → shoot those classes; add crops for them
-3. synth    → multiply the new crops
-4. merge    → rebuild the training set
-5. train    → same recipe, more data
-6. eval     → per-class recall; confusion matrix; FP causes
-7. tune     → re-derive thresholds
-8. validate → python scripts/validate_panel_inspector.py
-9. goto 1
+ 1. gap       → which classes are missing/weak, and how many images that is
+ 2. capture   → shoot those classes (gap tells you where each is found on site)
+ 3. autolabel → pre-label the new captures, then CORRECT them by hand
+ 4. synth     → multiply any new crops
+ 5. merge     → rebuild the training set
+ 6. split     → 80/10/10 grouped by capture; check leaking_groups == 0
+ 7. train     → same recipe, more data
+ 8. eval      → per-class recall; confusion matrix; FP causes
+ 9. tune      → re-derive thresholds
+10. export    → bundle + verify + install
+11. validate  → python scripts/validate_panel_inspector.py
+12. goto 1
 ```
+
+Production feeds this loop for free: every `unknown_industrial_component` the API
+returns is a labelled example the model is asking for. Collect those crops and they
+become step 3 of the next round.
 
 Read the diagnostics, don't just watch mAP:
 

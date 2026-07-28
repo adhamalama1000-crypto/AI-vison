@@ -145,18 +145,29 @@ call, postprocessing, visualization, persistence, API, UI) but it returns
   nothing.
 - **Industrial component recognition** — the whole engine around it is complete
   and tested (taxonomy, decoding, suppression cascade, nameplate reading, panel
-  understanding, reporting, metrics, training pipeline). What is missing is a
-  **trained checkpoint**: no public pretrained model covers these classes, and
-  none could be trained in the environment this was built in (no GPU, no network
-  route to dataset hosts). Until you supply one, the recogniser reports
-  `weights_missing` and returns **zero components** — never an invented one.
-  Two ways to get to non-zero recognition:
-  - train your own — `training/electrical/README.md`, then
-    `python -m training.electrical.cli train --install`;
+  understanding, reporting, metrics, training pipeline, dataset downloader,
+  group-aware splitter, auto-annotation, ONNX export bundle,
+  `POST /api/panel/analyze`). What is missing is **data**, and this is now
+  quantified rather than asserted: a verified survey of public sources
+  (`python -m training.electrical.cli plan`) finds ~3,500 usable images, only
+  **6 of 54** classes reaching the 300-instance reliability bar, and **6 priority
+  classes with zero public instances** (VFD, SMPS, busbar, DIN rail, cable duct,
+  emergency stop). `cli gap` costs the shortfall exactly: ~6,600 annotations
+  ≈ ~550 labelled panel photographs. Until a checkpoint exists the recogniser
+  reports `weights_missing` and returns **zero components** — never an invented
+  one. Three ways forward:
+  - train your own — [`docs/ELECTRICAL_MODEL_TRAINING.md`](docs/ELECTRICAL_MODEL_TRAINING.md)
+    walks the whole pipeline (`download` → `merge` → `split` → `train` →
+    `export --install`);
+  - bootstrap the labelling with `cli autolabel`, which pre-labels images for a
+    human to *correct* rather than draw from scratch;
   - or select a **zero-shot open-vocabulary** backend (`openvocab_owlv2`,
     `openvocab_grounding_dino`, `openvocab_florence2`) on the AI Models page.
     These need no dataset — they are driven by the taxonomy's engineer-phrased
     prompts — but they need `torch` + `transformers` and access to the model hub.
+
+  Deployment, once you have a checkpoint:
+  [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md).
 - **Wire analysis / topology — REMOVED BY DESIGN, not pending.** The classical
   tracer keyed off image gradients and colour, so on a real panel it labelled
   cabinet seams, DIN-rail edges, device outlines, duct lips, label borders and

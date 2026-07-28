@@ -53,16 +53,51 @@ def test_resolve_maps_real_world_labels(label, expected):
 
 
 @pytest.mark.parametrize("label", [
-    "circuit breaker",      # MCB? MCCB? ACB? RCCB? — genuinely ambiguous
-    "circuit-breaker",
     "banana",
     "widget_42",
     "",
     None,
 ])
 def test_resolve_refuses_to_guess(label):
-    """An ambiguous or unknown label must not be silently mapped to a class."""
+    """An unknown label must not be silently mapped to a class."""
     assert tax.resolve(label) is None
+
+
+@pytest.mark.parametrize("label", [
+    "circuit breaker",
+    "circuit-breaker",
+    "Circuit Breaker",
+    "vaccum circuit breaker",       # public-dataset spelling, MV device
+    "sf6 circuit breaker",
+    "VCB",
+])
+def test_vague_breaker_labels_resolve_to_the_generic_class(label):
+    """A label that says only 'circuit breaker' must not gain specificity.
+
+    Public datasets label a great many protective devices 'circuit breaker' with
+    no frame size or interrupting technology, and medium-voltage VCB/SF6 breakers
+    have no LV equivalent in this taxonomy. They resolve to the deliberately
+    vague ``circuit_breaker`` class — never to MCB, MCCB, ACB, RCCB or RCBO,
+    which would be inventing information the label does not carry.
+    """
+    assert tax.resolve(label) == "circuit_breaker"
+    assert tax.resolve(label) not in {"mcb", "mccb", "acb", "rccb", "rcbo"}
+
+
+def test_generic_breaker_never_shadows_a_specific_one():
+    """Longest-alias-first matching must keep the specific classes reachable."""
+    assert tax.resolve("miniature circuit breaker") == "mcb"
+    assert tax.resolve("Moulded Case Circuit Breaker") == "mccb"
+    assert tax.resolve("mould case circuit breaker") == "mccb"
+    assert tax.resolve("Air Circuit Breaker") == "acb"
+    assert tax.resolve("residual current circuit breaker") == "rccb"
+
+
+def test_generic_breaker_is_appended_not_inserted():
+    """CLASS_ORDER is append-only: inserting invalidates every checkpoint."""
+    idx = tax.class_index()
+    assert idx["mcb"] == 0
+    assert idx["circuit_breaker"] == len(tax.CLASS_ORDER) - 1
 
 
 def test_mcb_and_mccb_never_collide():
