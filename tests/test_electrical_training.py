@@ -229,13 +229,97 @@ def test_plan_separates_downloadable_from_manual_coverage():
     assert 0.0 < p["downloadable_coverage_fraction"] < 1.0, \
         "claiming full downloadable coverage of this taxonomy would be dishonest"
     assert p["classes_needing_manual_capture"]
-    assert "will not cover this taxonomy" in p["verdict"]
+    assert "will NOT produce a production model" in p["verdict"]
 
 
 def test_plan_can_be_restricted_to_one_source():
-    p = ds.plan(["rf_switchgear"])
+    p = ds.plan(["rf_control_panels_azure"])
     assert len(p["sources"]) == 1
     assert "mcb" in p["classes_from_downloadable_sources"]
+
+
+def test_every_roboflow_source_has_a_concrete_locator():
+    """A '<workspace>/<project>' placeholder is a fake citation, not a source."""
+    for s in ds.SOURCES:
+        if s.kind != "roboflow":
+            continue
+        assert "<" not in s.locator, \
+            f"{s.key}: locator {s.locator!r} is a placeholder"
+        assert s.verified, f"{s.key}: locator was never verified upstream"
+        # 'workspace/project' (no version) is legitimate but must be explained,
+        # because it cannot be downloaded until somebody forks and generates one.
+        if len(s.locator.split("/")) < 3:
+            assert "GENERATED VERSION" in s.notes or "version" in s.notes.lower()
+
+
+def test_excluded_sources_state_why_and_stay_out_of_the_forecast():
+    excluded = [s for s in ds.SOURCES if not s.usable]
+    assert excluded, "the registry should record the traps it found"
+    for s in excluded:
+        assert s.excluded_reason and len(s.excluded_reason) > 40
+    p = ds.plan()
+    keys = {row["key"] for row in p["sources"]}
+    for s in excluded:
+        assert s.key not in keys
+        assert s.key in {row["key"] for row in p["excluded_sources"]}
+
+
+def test_plan_forecast_is_bounded_by_measured_counts():
+    """The forecast must come from observed counts, not from `provides` lists."""
+    p = ds.plan()
+    forecast = p["forecast_instances_per_class"]
+    assert forecast, "no per-class counts were recorded for any source"
+    measured = {}
+    for s in ds.SOURCES:
+        if not s.usable or s.kind == "manual":
+            continue
+        for cid, n in s.class_counts.items():
+            measured[cid] = measured.get(cid, 0) + n
+    assert forecast == {k: v for k, v in
+                        sorted(measured.items(), key=lambda kv: -kv[1])}
+    # The honest headline: public data does not make this taxonomy reliable.
+    assert len(p["forecast_reliable_classes"]) < len(tax.CLASS_ORDER) / 2
+
+
+def test_priority_classes_without_public_data_are_named():
+    """The brief asks exactly which classes are missing — so name them."""
+    p = ds.plan()
+    missing = p["priority_classes_with_no_public_instances"]
+    assert missing, "some priority classes genuinely have no public instances"
+    for cid in missing:
+        assert cid in tax.SPECS
+        assert cid in ds.PRIORITY_CLASSES
+
+
+def test_requirements_report_from_zero_costs_the_whole_taxonomy():
+    r = ds.requirements_report(None, priority_only=True)
+    assert r["ready_classes"] == []
+    assert set(r["missing_classes"]) == set(ds.PRIORITY_CLASSES)
+    assert r["annotations_required"] == (
+        ds.MIN_INSTANCES_RELIABLE * len(ds.PRIORITY_CLASSES))
+    assert r["images_required"] > 0
+    # Every short class must come with somewhere to go and find it.
+    assert len(r["what_to_collect"]) == len(ds.PRIORITY_CLASSES)
+    for row in r["what_to_collect"]:
+        assert row["where_to_find_it"]
+
+
+def test_requirements_report_credits_data_that_exists(tmp_path):
+    root = str(tmp_path / "d")
+    # 2 splits x 2 images x 100 boxes of class index 0 ('mcb') = 400 instances
+    _make_yolo_dataset(root, names_count=1, per_image=100)
+    report = ds.requirements_report(ds.analyse_dataset(root))
+    mcb = next(r for r in report["per_class"] if r["class_id"] == "mcb")
+    assert mcb["have_annotations"] == 400
+    assert mcb["need_annotations"] == 0
+    assert mcb["status"] == "ready"
+    assert "mcb" in report["ready_classes"]
+    assert "mcb" not in report["missing_classes"]
+
+
+def test_priority_classes_are_all_real_taxonomy_classes():
+    for cid in ds.PRIORITY_CLASSES:
+        assert cid in tax.SPECS, cid
 
 
 def test_build_index_map_resolves_and_reports_unmappable():
@@ -323,7 +407,7 @@ def test_analyse_and_coverage_report(tmp_path):
     cov = ds.coverage_report(analysis)
     total = sum(len(cov[k]) for k in ("reliable", "weak", "untrainable", "absent"))
     assert total == len(tax.CLASS_ORDER)
-    assert cov["absent"], "a 6-image dataset cannot cover 53 classes"
+    assert cov["absent"], "a 6-image dataset cannot cover the whole taxonomy"
     assert "reliable" in cov["summary"]
 
 
@@ -380,6 +464,22 @@ def test_classes_json_written_beside_an_export(tmp_path):
     tr._write_classes_json(str(tmp_path))
     with open(tmp_path / "classes.json", encoding="utf-8") as fh:
         assert json.load(fh)["classes"] == list(tax.CLASS_ORDER)
+    # labels.txt lands beside it, holding real names rather than bare indices —
+    # the failure that once made every detection come back labelled "0".
+    labels = [ln.strip() for ln in
+              open(tmp_path / "labels.txt", encoding="utf-8") if ln.strip()]
+    assert labels == list(tax.CLASS_ORDER)
+
+
+def test_only_one_writer_produces_classes_json(tmp_path):
+    """train and export must not drift into writing different files."""
+    from training.electrical import export as ex
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    tr._write_classes_json(str(a))
+    ex.write_classes_json(str(b))
+    assert (json.load(open(a / "classes.json", encoding="utf-8"))
+            == json.load(open(b / "classes.json", encoding="utf-8")))
 
 
 def test_load_ground_truth_reads_absolute_pixel_boxes(tmp_path):

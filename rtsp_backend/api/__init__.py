@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from . import ai as ai_router
 from . import analysis, attendance, datasets, datasheets, employees, images, inspection
-from . import panels, reference, reference_panels, reports, training
+from . import panel_analyze, panels, reference, reference_panels, reports, training
 from .util import Context
 
 
@@ -26,6 +26,9 @@ def build_all_routers(ctx: Context) -> list[APIRouter]:
         datasheets.build_router(ctx),
         images.build_router(ctx),
         panels.build_router(ctx),
+        # /api/panel/* — the component-detection contract. Additive: the plural
+        # /api/panels/* router above keeps its richer response and PDF flow.
+        panel_analyze.build_router(ctx),
         inspection.build_router(ctx),
         reports.build_router(ctx),
     ]

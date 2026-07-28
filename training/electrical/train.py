@@ -242,13 +242,16 @@ def _write_classes_json(directory: str) -> None:
     The old pipeline shipped a ``labels.txt`` of bare integers, so labels came
     out as ``"0"``…``"9"``. Writing the authoritative class list beside every
     export makes that failure structurally impossible.
+
+    Delegates to :func:`training.electrical.export.write_classes_json` so there is
+    exactly one writer of this file. Two writers is how the taxonomy version in one
+    of them silently goes stale.
     """
     try:
-        os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, "classes.json"), "w",
-                  encoding="utf-8") as fh:
-            json.dump({"classes": list(tax.CLASS_ORDER),
-                       "taxonomy_version": "5.0"}, fh, indent=2)
+        from . import export as _export
+
+        _export.write_classes_json(directory)
+        _export.write_labels(directory)
     except OSError:
         pass
 

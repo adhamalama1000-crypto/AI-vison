@@ -3,6 +3,30 @@
 # load an exported model; these are needed to TRAIN and export one.
 scikit-learn>=1.3
 skl2onnx>=1.16
-onnx>=1.15
+onnx>=1.15             # also used by training.electrical.export to verify the
+                       # exported graph's class count against labels.txt
 optuna>=3.4            # optional: hyperparameter optimisation (Part 5)
-# ultralytics>=8.2     # optional: object-detection training (YOLO/RT-DETR, Part 4)
+
+# -- Electrical component detector (training/electrical/) --------------------
+#
+# ultralytics is REQUIRED to train YOLOv11/RT-DETR and to export ONNX; it pulls
+# torch, so it is left commented out to keep a CPU-only inference install small.
+# Uncomment (or pip install it directly) on the training machine. For GPU
+# training install a CUDA torch build matching your driver FIRST, then this.
+# ultralytics>=8.3       # YOLOv11 / YOLOv8 / RT-DETR training + ONNX export
+#
+# Dataset acquisition. Both are optional:
+#   - roboflow: convenience SDK for training.electrical.download. Without it the
+#     module falls back to the REST export API using `requests`, which is already
+#     a runtime dependency — so this is genuinely optional. Needs ROBOFLOW_API_KEY.
+#   - kaggle: the only supported way to authenticate against Kaggle. Needs a
+#     token at ~/.kaggle/kaggle.json.
+# roboflow>=1.1
+# kaggle>=1.6
+#
+# albumentations enables the blur/noise/CLAHE augmentations the brief asks for;
+# Ultralytics detects and applies it automatically when present.
+# albumentations>=1.4
+#
+# Zero-shot backends, used to bootstrap auto-annotation before any checkpoint
+# exists: see requirements-openvocab.txt (torch + transformers, GPU preferred).

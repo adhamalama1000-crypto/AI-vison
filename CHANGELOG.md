@@ -1,5 +1,97 @@
 # Changelog
 
+## [5.2.0] — Electrical component detection: real datasets, real pipeline
+
+The component-recognition engine shipped in 5.1.0 with everything except a
+trained model. This release builds the machinery that produces one, and — more
+usefully — establishes exactly what it will cost, with measured numbers instead of
+optimism. No existing feature was removed or rewritten.
+
+### The dataset question, answered
+
+- `training/electrical/datasets.py` **`SOURCES` no longer contains placeholders.**
+  Every Roboflow entry is a verified `workspace/project/version` with its licence,
+  image count and the per-class instance counts read off the upstream project. A
+  test now fails if a `<placeholder>` locator returns.
+- `plan()` is a **forecast, not a wish list**: it sums the measured per-class counts
+  and reports which classes will be reliable, weak, untrainable, or have no public
+  data at all.
+- **The finding:** public data does not cover this taxonomy. ~3,500 usable images
+  and ~5,300 instances across all sources; **6 of 54** classes reach the
+  300-instance reliability bar; **6 priority classes have zero public instances**
+  (VFD, SMPS, busbar, DIN rail, cable duct, emergency stop). Two sources are
+  recorded and **deliberately excluded** with reasons (thermal imagery; consumer
+  push buttons that would generate false positives) so they are not rediscovered
+  and merged by mistake. Three further traps are annotated in the registry,
+  including one dataset that is a single panel photographed 256 times.
+- `requirements_report()` / `cli gap` states the shortfall in actionable units:
+  which classes are missing, how many annotations are required, how many
+  photographs that implies, and **where on site each missing class is found**.
+  Exits non-zero while a priority class has no data, so CI can gate a release.
+
+### New
+
+- **`training/electrical/download.py`** — real fetchers (Roboflow SDK with a REST
+  fallback, Kaggle CLI, URL archives), YOLO layout normalisation, and remapping
+  onto the canonical taxonomy in one step. Failures name the fix (missing API key,
+  un-versioned upstream project) instead of producing an empty dataset that looks
+  like success. Archive extraction rejects path traversal and link members.
+- **`training/electrical/split.py`** — 80/10/10 splitting **grouped by capture**.
+  A random image-level split leaks near-duplicate framings of the same cabinet into
+  validation, which is the standard way an industrial detector reports mAP 0.95 and
+  then fails on site. Group keys are derived from filenames (source prefixes,
+  Roboflow `_jpg.rf.<hash>` mangling, augmentation verbs, shot counters) or supplied
+  via `groups.json`. Assignment is quota-driven rarest-class-first so scarce classes
+  still reach val. The report names `leaking_groups` and
+  `classes_absent_from_val` — classes silently excluded from mAP.
+- **`training/electrical/autolabel.py`** — model-assisted pre-labelling for human
+  *correction*, using a trained checkpoint when one exists and zero-shot OWLv2 /
+  Grounding DINO before that. Per-image verdicts (`auto` / `review` / `uncertain` /
+  `empty`) and a worst-first review queue. Boxes the model cannot classify are
+  written as `unknown_industrial_component`, never guessed. Ships the full human
+  annotation guide (`cli labelguide`).
+- **`training/electrical/export.py`** — `best.pt` + `best.onnx` + `labels.txt` +
+  `classes.json` + `model_card.json` bundles, with verification that re-reads the
+  bundle the way the runtime will: rejects a numeric `labels.txt`, a
+  labels/classes disagreement, a reordered label space, and an ONNX head whose class
+  count does not match the labels. `install_bundle` **refuses** a bundle that would
+  mislabel. TensorRT is documented rather than automated, because an engine is not
+  portable across GPU/driver/TensorRT versions.
+- **`POST /api/panel/analyze`** — the specified contract
+  (`components[].class/confidence/bbox`, xyxy absolute pixels) plus the panel report
+  (detected / missing / unknown components, confidence, annotated image). Additive:
+  `/api/panels/analyze` (plural) is unchanged and both run the same engine. Also
+  `GET /api/panel/classes` and `GET /api/panel/model`.
+- **`docs/ELECTRICAL_MODEL_TRAINING.md`** and
+  **`docs/PRODUCTION_DEPLOYMENT.md`**.
+- CLI subcommands: `download`, `split`, `gap`, `autolabel`, `labelguide`, `export`,
+  `verify`, `tensorrt`.
+
+### Taxonomy 5.1
+
+- Appended one class, **`circuit_breaker`** ("type unspecified"), as an honest home
+  for the many public datasets that label every protective device "circuit breaker"
+  and for medium-voltage VCB/SF6 breakers with no LV equivalent. `resolve()` maps a
+  bare "circuit breaker" here and **never** to MCB/MCCB/ACB/RCCB — it does not
+  invent specificity the label lacks — while "miniature circuit breaker" still
+  resolves to `mcb`.
+- Append-only respected: indices 0–52 are unchanged, so a taxonomy-5.0 checkpoint
+  stays valid and `verify` reports it as a valid prefix.
+- `models/components/labels.txt` is **not** shipped (it is an export artefact); the
+  runtime's rejection of a numeric labels file is unchanged.
+
+### Fixed
+
+Two bugs in the new splitter, both caught by its own tests before release:
+
+- The shot-counter heuristic stripped trailing digits without requiring a
+  separator, so `panel12` became `panel`, **every panel collapsed into one capture
+  group, and an entire dataset would have landed in a single split.** A separator or
+  parentheses is now mandatory.
+- Pooling input splits could silently overwrite same-named files from different
+  splits, losing both the image and its labels. Collisions are now detected,
+  renamed and reported.
+
 ## [5.1.0] — Madkour AI Panel Inspector: component recognition redesign
 
 The panel-inspection AI has been rebuilt rather than tuned. The previous system

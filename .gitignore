@@ -14,6 +14,13 @@ data/
 models/**/*.onnx
 models/**/*.pt
 models/**/*.engine
+# Installed-bundle sidecars (written by `cli export --install`). classes.json is
+# deliberately NOT ignored — the committed copy under models/components/ is the
+# authoritative label map and a test asserts it matches the taxonomy. labels.txt
+# must never be committed: an earlier release shipped one containing bare integers
+# and every detection came back labelled "0".
+models/**/labels.txt
+models/**/model_card.json
 runs/
 outputs/
 
