@@ -48,7 +48,7 @@ import subprocess
 import tarfile
 import zipfile
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 from . import datasets as ds
 
@@ -366,6 +366,205 @@ def fetch_github(locator: str, dest: str,
     return dest
 
 
+#: Open Images metadata and image endpoints. Both hosts are plain HTTPS and need
+#: no credentials, which is what makes the fiftyone-free route below possible.
+OID_CLASS_DESCRIPTIONS = ("https://storage.googleapis.com/openimages/2018_04/"
+                          "class-descriptions-boxable.csv")
+OID_BBOX_CSV = {
+    "train": ("https://storage.googleapis.com/openimages/v6/"
+              "oidv6-train-annotations-bbox.csv"),
+    "validation": ("https://storage.googleapis.com/openimages/v5/"
+                   "validation-annotations-bbox.csv"),
+    "test": ("https://storage.googleapis.com/openimages/v5/"
+             "test-annotations-bbox.csv"),
+}
+OID_IMAGE_URL = "https://open-images-dataset.s3.amazonaws.com/{split}/{image_id}.jpg"
+
+
+def parse_oid_label_ids(csv_text: str,
+                        classes: Sequence[str]) -> dict[str, str]:
+    """Map Open Images display names onto their ``/m/...`` label ids.
+
+    The boxable class-description CSV is headerless ``label_id,display_name``.
+    Matching is case-insensitive because the display names are title-cased
+    ("Light switch") and nobody types them that way.
+    """
+    wanted = {c.strip().lower(): c.strip() for c in classes if c.strip()}
+    found: dict[str, str] = {}
+    for line in csv_text.splitlines():
+        parts = line.split(",", 1)
+        if len(parts) != 2:
+            continue
+        label_id, display = parts[0].strip(), parts[1].strip()
+        key = display.lower()
+        if key in wanted:
+            found[wanted[key]] = label_id
+    return found
+
+
+def filter_oid_bbox_rows(lines: Iterable[str],
+                         label_ids: Sequence[str]) -> set[str]:
+    """Image ids whose annotations mention any of ``label_ids``.
+
+    Takes an iterable of raw CSV lines so a 2.3 GB annotation file can be
+    streamed and discarded rather than stored: only the matching image ids are
+    kept, which for a couple of classes is a few hundred strings.
+    """
+    import csv as _csv
+
+    wanted = set(label_ids)
+    rdr = _csv.reader(iter(lines))
+    header = next(rdr, None)
+    if header is None:
+        return set()
+    try:
+        li, ii = header.index("LabelName"), header.index("ImageID")
+    except ValueError:
+        li, ii = 2, 0
+    out: set[str] = set()
+    for row in rdr:
+        if len(row) > li and row[li] in wanted:
+            out.add(row[ii])
+    return out
+
+
+def fetch_openimages_negatives(
+        locator: str, dest: str,
+        splits: Sequence[str] = ("validation", "test", "train"),
+        limit: Optional[int] = None,
+        log: Optional[Callable[[str], None]] = None) -> str:
+    """Build a YOLO **negative** set from Open Images without FiftyOne.
+
+    Open Images has no industrial electrical class — its nearest neighbours are
+    domestic ("Light switch", "Power plugs and sockets"). So the images it yields
+    are useful as *hard negatives*: real photographs of electrical fittings in
+    which the correct answer is that there are **zero** taxonomy components.
+    Every label file written here is deliberately empty.
+
+    Why this exists alongside the FiftyOne path: FiftyOne is required only because
+    downloading Open Images whole is not viable. It is not the only alternative.
+    The class-description CSV, the per-split bounding-box CSVs and the image
+    bucket are all plain, unauthenticated HTTPS, so the annotation file can be
+    **streamed and filtered** — 2.3 GB read, a few hundred image ids kept, then
+    only those images fetched. That works in an environment where FiftyOne cannot
+    be installed, and it is the difference between having real imagery to measure
+    false positives against and having none.
+
+    Read the manifest before using the output. A detection on one of these images
+    is *either* a genuine false positive *or* an unlabelled real device that
+    happened to be in frame — Open Images did not annotate panel components, so
+    this set cannot distinguish the two. Inspect what the model fires on before
+    quoting a false-positive rate from it.
+    """
+    import requests
+
+    say = log or (lambda m: None)
+    if "<" in locator:
+        raise DownloadError(f"'{locator}' is a placeholder, not a class list")
+    classes = [c.strip() for c in locator.split(",") if c.strip()]
+    if not classes:
+        raise DownloadError("no Open Images class names given")
+
+    try:
+        resp = requests.get(OID_CLASS_DESCRIPTIONS, timeout=120)
+        resp.raise_for_status()
+    except Exception as exc:
+        raise DownloadError(
+            f"could not read the Open Images class list: {exc}") from exc
+    label_ids = parse_oid_label_ids(resp.text, classes)
+    missing = [c for c in classes if c not in label_ids]
+    if missing:
+        raise DownloadError(
+            f"not Open Images boxable class names: {missing}. The CSV at "
+            f"{OID_CLASS_DESCRIPTIONS} lists the 601 valid names.")
+    say(f"resolved {label_ids}")
+
+    img_dir = os.path.join(dest, "images", "val")
+    lbl_dir = os.path.join(dest, "labels", "val")
+    os.makedirs(img_dir, exist_ok=True)
+    os.makedirs(lbl_dir, exist_ok=True)
+
+    per_split: dict[str, int] = {}
+    downloaded = 0
+    failed = 0
+    for split in splits:
+        url = OID_BBOX_CSV.get(split)
+        if not url:
+            say(f"  unknown split '{split}', skipping")
+            continue
+        say(f"  streaming {split} annotations")
+        try:
+            with requests.get(url, stream=True, timeout=(30, 900)) as r:
+                r.raise_for_status()
+                ids = filter_oid_bbox_rows(
+                    r.iter_lines(decode_unicode=True),
+                    list(label_ids.values()))
+        except Exception as exc:
+            say(f"  {split}: annotation stream failed ({exc})")
+            continue
+        ordered = sorted(ids)
+        if limit is not None:
+            room = max(0, limit - downloaded)
+            ordered = ordered[:room]
+        say(f"  {split}: {len(ids)} image(s) matched, fetching {len(ordered)}")
+        got = 0
+        for image_id in ordered:
+            path = os.path.join(img_dir, f"{image_id}.jpg")
+            try:
+                _http_download(OID_IMAGE_URL.format(split=split,
+                                                    image_id=image_id), path)
+            except Exception:
+                failed += 1
+                continue
+            if not os.path.getsize(path):
+                os.remove(path)
+                failed += 1
+                continue
+            # Empty label file: a real image asserted to contain no taxonomy
+            # component. This is the whole point of the set.
+            open(os.path.join(lbl_dir, f"{image_id}.txt"), "w").close()
+            got += 1
+            downloaded += 1
+        per_split[split] = got
+        if limit is not None and downloaded >= limit:
+            break
+
+    if not downloaded:
+        raise DownloadError(
+            "no Open Images negatives were downloaded; check that "
+            "storage.googleapis.com and open-images-dataset.s3.amazonaws.com "
+            "are reachable from this environment")
+
+    manifest = {
+        "source": "open_images_hard_negatives",
+        "classes_requested": classes,
+        "open_images_label_ids": label_ids,
+        "images": downloaded,
+        "images_per_source_split": per_split,
+        "failed": failed,
+        "labels": "ALL EMPTY — deliberately",
+        "why_empty": (
+            "Open Images has no industrial electrical class among its 601 "
+            "boxable classes. These images are real photographs of domestic "
+            "electrical fittings, kept as hard negatives: the correct output of "
+            "the detector on them is zero components."),
+        "caveat": (
+            "A detection on one of these images is EITHER a genuine false "
+            "positive OR an unlabelled real device in frame. Open Images did not "
+            "annotate panel components, so this set cannot tell the two apart by "
+            "itself. Inspect what the model fires on before quoting a "
+            "false-positive rate from it."),
+        "not_usable_for": (
+            "recall, mAP, or any per-class accuracy figure — there are no "
+            "positive labels here"),
+        "licence": "CC BY 4.0 (Open Images annotations and images)",
+    }
+    with open(os.path.join(dest, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    say(f"{downloaded} real hard-negative image(s) -> {dest}")
+    return dest
+
+
 def fetch_openimages(locator: str, dest: str,
                      max_samples: Optional[int] = 2000,
                      log: Optional[Callable[[str], None]] = None) -> str:
@@ -398,11 +597,15 @@ def fetch_openimages(locator: str, dest: str,
         import fiftyone as fo  # type: ignore
         import fiftyone.zoo as foz  # type: ignore
     except ImportError as exc:
-        raise DownloadError(
-            f"fiftyone is required to pull an Open Images subset ({exc}). "
-            f"pip install fiftyone. Downloading Open Images without it means "
-            f"fetching the whole ~500 GB release to keep a few hundred images, "
-            f"which is why there is no fallback here.") from exc
+        # FiftyOne is the convenient route, not the only one. The annotation CSVs
+        # and the image bucket are unauthenticated HTTPS, so the 2.3 GB
+        # bounding-box file can be streamed and filtered instead — see
+        # fetch_openimages_negatives. That fallback yields hard negatives only,
+        # which is exactly what this source is registered for.
+        say(f"fiftyone is not installed ({exc}); falling back to the direct "
+            f"streaming route, which yields hard negatives only")
+        return fetch_openimages_negatives(locator, dest, limit=max_samples,
+                                          log=log)
 
     os.makedirs(dest, exist_ok=True)
     say(f"Open Images V7: classes={classes} max_samples={max_samples}")

@@ -860,3 +860,47 @@ def test_normalise_remap_split_and_report_run_end_to_end(tmp_path):
     assert "vfd" in gap["missing_classes"]
     # And every short class comes with somewhere to go and photograph it.
     assert all(r["where_to_find_it"] for r in gap["what_to_collect"])
+
+
+# --------------------------------------------------------------------------
+# Open Images hard negatives — the fiftyone-free route
+# --------------------------------------------------------------------------
+
+def test_oid_label_ids_resolve_case_insensitively():
+    csv_text = ("/m/03bbps,Power plugs and sockets\n"
+                "/m/03jbxj,Light switch\n"
+                "/m/0qjjc,Remote control\n")
+    got = dl.parse_oid_label_ids(csv_text, ["light switch", "Power plugs and sockets"])
+    assert got == {"light switch": "/m/03jbxj",
+                   "Power plugs and sockets": "/m/03bbps"}
+
+
+def test_oid_label_ids_omit_names_that_are_not_classes():
+    csv_text = "/m/03jbxj,Light switch\n"
+    assert dl.parse_oid_label_ids(csv_text, ["Circuit breaker"]) == {}
+
+
+def test_oid_bbox_filter_keeps_only_matching_image_ids():
+    lines = [
+        "ImageID,Source,LabelName,Confidence,XMin,XMax,YMin,YMax",
+        "img_a,xclick,/m/03jbxj,1,0.1,0.2,0.1,0.2",
+        "img_b,xclick,/m/0qjjc,1,0.1,0.2,0.1,0.2",
+        "img_c,xclick,/m/03bbps,1,0.1,0.2,0.1,0.2",
+        "img_a,xclick,/m/03bbps,1,0.3,0.4,0.3,0.4",
+    ]
+    got = dl.filter_oid_bbox_rows(lines, ["/m/03jbxj", "/m/03bbps"])
+    assert got == {"img_a", "img_c"}
+
+
+def test_oid_bbox_filter_tolerates_an_empty_stream():
+    assert dl.filter_oid_bbox_rows([], ["/m/03jbxj"]) == set()
+
+
+def test_oid_negatives_refuses_a_placeholder_locator(tmp_path):
+    with pytest.raises(dl.DownloadError, match="placeholder"):
+        dl.fetch_openimages_negatives("<owner>/<slug>", str(tmp_path))
+
+
+def test_oid_negatives_refuses_an_empty_class_list(tmp_path):
+    with pytest.raises(dl.DownloadError, match="no Open Images class names"):
+        dl.fetch_openimages_negatives("  ,  ", str(tmp_path))
