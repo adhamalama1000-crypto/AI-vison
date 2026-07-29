@@ -58,8 +58,10 @@ from rtsp_backend.electrical import metrics as em  # noqa: E402
 from rtsp_backend.electrical import taxonomy as tax  # noqa: E402
 from training.electrical import autolabel as al  # noqa: E402
 from training.electrical import datasets as ds  # noqa: E402
+from training.electrical import dedup as dd  # noqa: E402
 from training.electrical import download as dl  # noqa: E402
 from training.electrical import export as ex  # noqa: E402
+from training.electrical import refine as rf  # noqa: E402
 from training.electrical import split as splitter  # noqa: E402
 from training.electrical import synthetic as syn  # noqa: E402
 from training.electrical import train as tr  # noqa: E402
@@ -71,6 +73,13 @@ def _dump(obj) -> None:
 
 def _stderr(msg: str) -> None:
     print(msg, file=sys.stderr)
+
+
+def bm_defaults() -> tuple[int, int, float]:
+    """Benchmark defaults, read from the bench module so they cannot drift."""
+    from training.electrical import bench as bm
+
+    return bm.DEFAULT_WARMUP, bm.DEFAULT_RUNS, bm.DEFAULT_LATENCY_BUDGET_MS
 
 
 def cmd_plan(args) -> int:
@@ -154,8 +163,15 @@ def cmd_autolabel(args) -> int:
         args.images, args.out, backends=args.backends or al.DEFAULT_BACKENDS,
         params=json.loads(args.params) if args.params else None,
         accept=args.accept, review=args.review, split=args.split,
-        limit=args.limit, copy_images=not args.symlink, log=_stderr)
+        limit=args.limit, copy_images=not args.symlink,
+        refine_boxes=not args.no_refine, sam_weights=args.sam_weights,
+        device=args.device, log=_stderr)
     _dump(manifest)
+    ref = manifest.get("box_refinement") or {}
+    if ref.get("interpretation"):
+        _stderr("\nbox refinement: " + ref["interpretation"])
+    elif not ref.get("enabled") and ref.get("reason"):
+        _stderr("\nbox refinement unavailable: " + str(ref["reason"]))
     return 0 if manifest.get("status") == "labelled" else 1
 
 
@@ -165,11 +181,21 @@ def cmd_labelguide(args) -> int:
 
 
 def cmd_export(args) -> int:
+    evaluation = None
+    if args.eval_json:
+        try:
+            with open(args.eval_json, "r", encoding="utf-8") as fh:
+                evaluation = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            _stderr(f"error: could not read --eval-json {args.eval_json}: {exc}")
+            return 2
+
     res = ex.export_bundle(
         args.weights, args.out, imgsz=args.imgsz, opset=args.opset,
         simplify=not args.no_simplify, half=args.half, dynamic=args.dynamic,
         metadata={"data": args.data, "notes": args.notes} if
         (args.data or args.notes) else None,
+        run_dir=args.run_dir, evaluation=evaluation, plots=not args.no_plots,
         log=_stderr)
     if res.get("status") != "exported":
         _dump(res)
@@ -183,6 +209,117 @@ def cmd_export(args) -> int:
     if args.install and res["install"]["status"] != "installed":
         return 1
     return 0 if res["verification"]["ok"] else 1
+
+
+def cmd_analyse_batch(args) -> int:
+    """Run the detector over a folder, batching the forward pass."""
+    import time
+
+    import cv2
+
+    from rtsp_backend import electrical  # noqa: F401  (registers backends)
+    from rtsp_backend.ai import registry
+
+    if not os.path.isdir(args.images):
+        _stderr(f"error: not a directory: {args.images}")
+        return 2
+    params = json.loads(args.params) if args.params else {}
+    try:
+        backend = registry.get("components", args.backend)(**params)
+        backend.load()
+    except Exception as exc:
+        _stderr(f"backend unavailable: {exc}")
+        return 1
+    if not getattr(backend, "ready", False):
+        _stderr(f"backend not ready: {getattr(backend, '_reason', 'unknown')}")
+        return 1
+
+    files = [f for f in sorted(os.listdir(args.images))
+             if f.lower().endswith(ds.IMAGE_EXTS)]
+    if args.limit:
+        files = files[:args.limit]
+    if not files:
+        _stderr(f"no images in {args.images}")
+        return 1
+
+    frames, names, unreadable = [], [], []
+    for fn in files:
+        img = cv2.imread(os.path.join(args.images, fn), cv2.IMREAD_COLOR)
+        if img is None:
+            unreadable.append(fn)
+            continue
+        frames.append(img)
+        names.append(fn)
+
+    started = time.perf_counter()
+    if hasattr(backend, "recognize_batch"):
+        results = backend.recognize_batch(frames, batch_size=args.batch)
+    else:
+        results = [backend.recognize(f) for f in frames]
+    elapsed = time.perf_counter() - started
+
+    per_image = []
+    from collections import Counter
+    totals: Counter = Counter()
+    for fn, res in zip(names, results):
+        counts = Counter(c.class_id for c in res.accepted)
+        totals.update(counts)
+        per_image.append({"filename": fn, "components": len(res.accepted),
+                          "counts": dict(counts)})
+
+    _dump({
+        "backend": args.backend,
+        "true_batching": bool(getattr(backend, "supports_true_batching", False)),
+        "batch_size": args.batch,
+        "images": len(frames),
+        "unreadable": unreadable,
+        "elapsed_s": round(elapsed, 3),
+        "images_per_second": (round(len(frames) / elapsed, 3) if elapsed else None),
+        "ms_per_image": (round(elapsed * 1000.0 / len(frames), 2)
+                         if frames else None),
+        "total_components": int(sum(totals.values())),
+        "instances_per_class": dict(totals.most_common()),
+        "per_image": per_image,
+        "note": (
+            "Batching is a throughput optimisation for folder-scale work. It is "
+            "deliberately not used on the RTSP path: a cabinet does not change "
+            "between frames, so buffering to fill a batch would add latency for no "
+            "accuracy gain."
+            + ("" if getattr(backend, "supports_true_batching", False) else
+               f" NOTE: '{args.backend}' does not implement a real batched forward "
+               f"pass, so this ran sequentially — the timing above is per-image "
+               f"cost, not a batching speed-up.")),
+    })
+    return 0
+
+
+def cmd_hpo(args) -> int:
+    from training.electrical import hpo
+
+    space = hpo.HpoSpace(frozen=tuple(args.freeze or ()))
+    res = hpo.optimise(
+        args.data, dataset_root=args.root, arch=args.arch,
+        trials=args.trials, epochs=args.epochs, device=args.device,
+        space=space,
+        respect_domain_priors=not args.no_respect_domain_priors,
+        study_name=args.study, storage=args.storage,
+        prune=not args.no_prune, seed=args.seed,
+        baseline=not args.no_baseline, log=_stderr)
+
+    if res.status != "completed":
+        _dump(res.to_dict())
+        _stderr(f"{res.status}: {res.reason}")
+        return 1
+
+    _stderr("\n" + hpo.format_history(res))
+    _dump(res.to_dict())
+    if args.out:
+        hpo.write_result(res, args.out)
+        _stderr(f"\nwrote {args.out}")
+    for w in res.warnings:
+        _stderr(f"\nwarning: {w}")
+    _stderr("\n" + (res.next_step or ""))
+    return 0
 
 
 def cmd_verify(args) -> int:
@@ -234,8 +371,51 @@ def cmd_remap(args) -> int:
 
 
 def cmd_merge(args) -> int:
-    _dump(ds.merge(args.roots, args.dst, copy_images=not args.symlink))
+    totals = ds.merge(args.roots, args.dst, copy_images=not args.symlink)
+    out = {"merge": totals}
+    if args.dedup:
+        # Merging is exactly when duplicates appear: two sources republishing the
+        # same photographs is the common case, not the exception.
+        dedup_dst = args.dedup_dst or (args.dst.rstrip("/\\") + "_dedup")
+        out["dedup"] = dd.deduplicate(
+            args.dst, dedup_dst, threshold=args.dedup_threshold,
+            symlink=args.symlink, log=_stderr)
+        out["dataset_root"] = dedup_dst
+    else:
+        out["dataset_root"] = args.dst
+        out["dedup_hint"] = (
+            "Duplicates were NOT checked. Two of the registry's public sources are "
+            "probably the same photographs republished; if both are in this merge, "
+            "the same image can land in train and val and every validation number "
+            "will be inflated. Run: python -m training.electrical.cli dedup "
+            f"--root {args.dst}")
+    _dump(out)
     return 0
+
+
+def cmd_dedup(args) -> int:
+    if args.dst:
+        report = dd.deduplicate(args.root, args.dst,
+                                threshold=args.threshold, keep=args.keep,
+                                symlink=args.symlink,
+                                drop_label_conflicts=args.drop_label_conflicts,
+                                log=_stderr)
+        _dump(report)
+        for w in report.get("warnings") or []:
+            _stderr(f"warning: {w}")
+        return 0
+
+    report = dd.analyse_duplicates(args.root, threshold=args.threshold,
+                                   log=_stderr)
+    _dump(report)
+    if report.get("status") != "analysed":
+        _stderr(f"skipped: {report.get('reason')}")
+        return 1
+    _stderr("\n" + report["verdict"])
+    if not args.dst:
+        _stderr("\n(read-only analysis — pass --dst to write a deduplicated copy)")
+    # Cross-split duplication corrupts every metric, so make it a CI failure.
+    return 1 if report["cross_split_groups"] else 0
 
 
 def cmd_analyse(args) -> int:
@@ -266,13 +446,60 @@ def cmd_train(args) -> int:
 
 
 def cmd_bench(args) -> int:
+    weights = json.loads(args.weights) if args.weights else None
     out = tr.benchmark(args.data, args.root, archs=args.archs,
                        epochs=args.epochs, imgsz=args.imgsz, batch=args.batch,
                        device=args.device,
-                       log=lambda m: print(m, file=sys.stderr))
-    print(out["table"])
-    _dump({k: v for k, v in out.items() if k != "table"})
-    return 0 if out["comparison"]["winner"] else 1
+                       measure_runtime=not args.no_runtime,
+                       runs=args.runs,
+                       latency_budget_ms=args.latency_budget,
+                       weights=weights,
+                       min_map_50_95=args.min_map,
+                       log=_stderr)
+    _stderr("\n=== accuracy ===")
+    _stderr(out["table"])
+    _stderr("\n=== runtime ===")
+    _stderr(out["runtime_table"])
+    _stderr("\n=== selection (accuracy + speed) ===")
+    _stderr(out["selection_table"])
+    _stderr("\n" + out["selection"]["rationale"])
+    _dump({k: v for k, v in out.items()
+           if k not in ("table", "runtime_table", "selection_table")})
+    return 0 if out["selection"]["winner"] else 1
+
+
+def cmd_profile(args) -> int:
+    """Measure latency/FPS/memory of an already-trained checkpoint or backend."""
+    from training.electrical import bench as bm
+
+    if args.weights:
+        prof = tr.profile_trained(
+            args.weights, args.root, args.label or os.path.basename(args.weights),
+            split=args.split, imgsz=args.imgsz, device=args.device,
+            warmup=args.warmup, runs=args.runs, log=_stderr)
+    else:
+        from rtsp_backend import electrical  # noqa: F401
+        from rtsp_backend.ai import registry
+        params = json.loads(args.params) if args.params else {}
+        try:
+            inst = registry.get("components", args.backend)(**params)
+            inst.load()
+        except Exception as exc:
+            _stderr(f"backend unavailable: {exc}")
+            return 1
+        prof = bm.profile_backend(
+            inst, os.path.join(args.root, "images", args.split),
+            args.label or args.backend, warmup=args.warmup, runs=args.runs,
+            device=args.device, log=_stderr)
+
+    _dump(prof.to_dict())
+    if prof.status != "measured":
+        _stderr(f"{prof.status}: {prof.reason}")
+        return 1
+    _stderr("\n" + bm.format_profile_table({prof.label: prof}))
+    for n in prof.notes:
+        _stderr(f"note: {n}")
+    return 0
 
 
 def cmd_eval(args) -> int:
@@ -381,6 +608,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--split", default="train")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--symlink", action="store_true")
+    ap.add_argument("--no-refine", action="store_true",
+                    help="skip SAM2 box refinement. Open-vocabulary boxes are "
+                         "loose (they include DIN rail and neighbouring devices), "
+                         "so refinement is on by default — but if the manifest "
+                         "reports a low accept rate it is costing compute for "
+                         "nothing on your imagery")
+    ap.add_argument("--sam-weights",
+                    help="explicit SAM/SAM2 checkpoint or HF model id "
+                         f"(default: first available of {', '.join(rf.SAM_CANDIDATES[:3])}...)")
+    ap.add_argument("--device", default="cpu",
+                    help="device for SAM refinement, e.g. 0 for the first GPU")
     ap.set_defaults(func=cmd_autolabel)
 
     ap = sub.add_parser("labelguide",
@@ -400,10 +638,61 @@ def build_parser() -> argparse.ArgumentParser:
                     help="dynamic input shape (slower, more flexible)")
     ap.add_argument("--data", help="dataset.yaml used, recorded in the model card")
     ap.add_argument("--notes", help="free-text provenance for the model card")
+    ap.add_argument("--run-dir",
+                    help="Ultralytics run directory to harvest curves and the "
+                         "confusion matrix from (default: inferred from the "
+                         "weights path)")
+    ap.add_argument("--eval-json",
+                    help="JSON from 'cli eval', recorded into metrics.json. "
+                         "Without it the bundle carries no accuracy evidence and "
+                         "cannot be audited later.")
+    ap.add_argument("--no-plots", action="store_true",
+                    help="skip rendering curves/confusion matrix for anything "
+                         "Ultralytics did not already plot")
     ap.add_argument("--install", action="store_true",
                     help="install into models/components/ after verification")
     ap.add_argument("--install-dir", default=ex.DEFAULT_INSTALL_DIR)
     ap.set_defaults(func=cmd_export)
+
+    ap = sub.add_parser("analyse-batch",
+                        help="run the detector over a folder with batched inference")
+    ap.add_argument("--images", required=True)
+    ap.add_argument("--backend", default="industrial_onnx")
+    ap.add_argument("--params", help="JSON params for the backend")
+    ap.add_argument("--batch", type=int, default=8)
+    ap.add_argument("--limit", type=int)
+    ap.set_defaults(func=cmd_analyse_batch)
+
+    ap = sub.add_parser("hpo",
+                        help="Optuna hyperparameter search for the detector")
+    ap.add_argument("--data", required=True, help="dataset.yaml")
+    ap.add_argument("--root", help="dataset root, so the search can warn when "
+                                  "the dataset is too thin to be worth tuning")
+    ap.add_argument("--arch", default=tr.DEFAULT_ARCH, choices=tr.SUPPORTED_ARCHS)
+    ap.add_argument("--trials", type=int, default=20)
+    ap.add_argument("--epochs", type=int, default=20,
+                   help="epochs PER TRIAL. Short is fine — the search ranks the "
+                        "space, then you train the winner properly. Below ~10 the "
+                        "ranking stops transferring to a full run.")
+    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--study", default="electrical_detector_hpo")
+    ap.add_argument("--storage",
+                   help="Optuna storage URL (default: sqlite under "
+                        "runs/electrical/, so an interrupted search resumes)")
+    ap.add_argument("--freeze", nargs="*",
+                   help="hyperparameters to leave at their defaults")
+    ap.add_argument("--no-prune", action="store_true",
+                   help="disable median pruning of trials that fall behind")
+    ap.add_argument("--no-baseline", action="store_true",
+                   help="skip the hand-tuned reference run")
+    ap.add_argument("--no-respect-domain-priors", action="store_true",
+                   help="also search fliplr/flipud and unbounded rotation. OFF by "
+                        "default: the search will turn horizontal flip on because "
+                        "it looks like free augmentation, and teach the model that "
+                        "mirrored nameplates are normal")
+    ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--out", help="write the full result JSON here")
+    ap.set_defaults(func=cmd_hpo)
 
     ap = sub.add_parser("verify", help="check a bundle the way the runtime will")
     ap.add_argument("--bundle", default=ex.DEFAULT_INSTALL_DIR)
@@ -441,7 +730,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--roots", nargs="+", required=True)
     sp.add_argument("--dst", required=True)
     sp.add_argument("--symlink", action="store_true")
+    sp.add_argument("--dedup", action="store_true",
+                    help="remove near-duplicate images after merging "
+                         "(strongly recommended — see 'dedup')")
+    sp.add_argument("--dedup-dst", help="output root for the deduplicated copy "
+                                        "(default: <dst>_dedup)")
+    sp.add_argument("--dedup-threshold", type=int, default=dd.DEFAULT_THRESHOLD,
+                    help="perceptual-hash Hamming distance threshold")
     sp.set_defaults(func=cmd_merge)
+
+    sp = sub.add_parser("dedup",
+                        help="find/remove duplicate images (read-only without "
+                             "--dst); exits non-zero on cross-split leakage")
+    sp.add_argument("--root", required=True)
+    sp.add_argument("--dst", help="write a deduplicated copy here")
+    sp.add_argument("--threshold", type=int, default=dd.DEFAULT_THRESHOLD)
+    sp.add_argument("--keep", default="train_first",
+                    choices=["train_first", "first"],
+                    help="train_first keeps the training copy and drops the "
+                         "val/test copy, so evaluation stays unseen")
+    sp.add_argument("--drop-label-conflicts", action="store_true",
+                    help="also deduplicate groups whose labels disagree "
+                         "(default: keep them and report, since one label is wrong)")
+    sp.add_argument("--symlink", action="store_true")
+    sp.set_defaults(func=cmd_dedup)
 
     sp = sub.add_parser("analyse", help="per-class counts + trainability report")
     sp.add_argument("--root", required=True)
@@ -460,7 +772,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="copy the exported ONNX into models/components/")
     sp.set_defaults(func=cmd_train)
 
-    sp = sub.add_parser("bench", help="train + rank several architectures")
+    sp = sub.add_parser("bench",
+                        help="train several architectures and pick one on "
+                             "accuracy AND speed")
     sp.add_argument("--data", required=True)
     sp.add_argument("--root", required=True, help="dataset root (for evaluation)")
     sp.add_argument("--archs", nargs="+",
@@ -469,7 +783,38 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--imgsz", type=int, default=960)
     sp.add_argument("--batch", type=int, default=8)
     sp.add_argument("--device", default="cpu")
+    sp.add_argument("--no-runtime", action="store_true",
+                    help="skip latency/memory measurement and rank on accuracy "
+                         "alone (which reliably picks the biggest model)")
+    sp.add_argument("--runs", type=int,
+                    help=f"measured inferences per model "
+                         f"(default {bm_defaults()[1]})")
+    sp.add_argument("--latency-budget", type=float,
+                    help=f"disqualify models slower than this p95, ms "
+                         f"(default {bm_defaults()[2]:.0f})")
+    sp.add_argument("--min-map", type=float, default=0.0,
+                    help="disqualify models below this mAP@50-95")
+    sp.add_argument("--weights",
+                    help='JSON score weights, e.g. '
+                         '\'{"map_50_95":0.7,"speed":0.05}\' to prioritise accuracy')
     sp.set_defaults(func=cmd_bench)
+
+    sp = sub.add_parser("profile",
+                        help="measure latency / FPS / memory of one model")
+    sp.add_argument("--root", required=True,
+                    help="dataset root — REAL images are required, because "
+                         "detector latency depends on the candidate count")
+    sp.add_argument("--split", default="val")
+    sp.add_argument("--weights", help="a trained .pt to profile")
+    sp.add_argument("--backend", default="industrial_onnx",
+                    help="or profile a registered backend instead")
+    sp.add_argument("--params", help="JSON params for --backend")
+    sp.add_argument("--label")
+    sp.add_argument("--imgsz", type=int, default=960)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--warmup", type=int, default=bm_defaults()[0])
+    sp.add_argument("--runs", type=int, default=bm_defaults()[1])
+    sp.set_defaults(func=cmd_profile)
 
     sp = sub.add_parser("eval", help="evaluate a registered backend")
     sp.add_argument("--root", required=True)

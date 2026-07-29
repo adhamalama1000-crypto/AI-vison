@@ -15,6 +15,8 @@ Layout::
     expert.py        per-component expert annotation and bill of materials
     panel_type.py    panel-type / function inference, missing-component and
                      maintenance reasoning
+    risk.py          aggregates findings into one auditable risk level, and
+                     refuses to score when there is no basis for one
     inspector.py     the engine that composes all of the above into a report
     metrics.py       precision / recall / F1 / mAP / confusion matrix /
                      FP-FN analysis / threshold optimisation
@@ -29,10 +31,11 @@ from . import taxonomy  # noqa: F401
 from . import postprocess  # noqa: F401
 from . import nameplate  # noqa: F401
 from . import panel_type  # noqa: F401
+from . import risk  # noqa: F401
 from . import expert  # noqa: F401
 from . import metrics  # noqa: F401
 from . import recognizer  # noqa: F401  (registers backends)
 from . import inspector  # noqa: F401
 
-__all__ = ["taxonomy", "postprocess", "nameplate", "panel_type", "expert",
-           "metrics", "recognizer", "inspector"]
+__all__ = ["taxonomy", "postprocess", "nameplate", "panel_type", "risk",
+           "expert", "metrics", "recognizer", "inspector"]

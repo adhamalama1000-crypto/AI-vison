@@ -167,7 +167,17 @@ call, postprocessing, visualization, persistence, API, UI) but it returns
     prompts — but they need `torch` + `transformers` and access to the model hub.
 
   Deployment, once you have a checkpoint:
-  [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md).
+  [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md). Full audit of
+  what is and is not built: [`docs/AUDIT_v5.2.0.md`](docs/AUDIT_v5.2.0.md).
+
+  The pipeline around the missing checkpoint is complete: verified dataset registry,
+  downloader (Roboflow / Kaggle / URL / GitHub / Open Images), perceptual-hash
+  deduplication with cross-split leak detection, group-aware 80/10/10 splitting,
+  SAM2-refined auto-annotation, Optuna hyperparameter search, architecture
+  benchmarking that picks a model on accuracy **and** latency, ONNX export bundles
+  carrying their own confusion matrix and curves, batch inference, and an aggregate
+  risk assessment that returns `unknown` rather than `low` when it has no basis to
+  score.
 - **Wire analysis / topology — REMOVED BY DESIGN, not pending.** The classical
   tracer keyed off image gradients and colour, so on a real panel it labelled
   cabinet seams, DIN-rail edges, device outlines, duct lips, label borders and

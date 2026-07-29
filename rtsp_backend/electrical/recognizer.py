@@ -328,6 +328,21 @@ class IndustrialRecognizer(ComponentDetector):
     def raw_candidates(self, frame: np.ndarray) -> list[pp.Candidate]:
         raise NotImplementedError
 
+    def raw_candidates_batch(self, frames: Sequence[np.ndarray]
+                             ) -> list[list[pp.Candidate]]:
+        """Batched raw inference. Override where the backend genuinely batches.
+
+        The default is a sequential loop, which is correct but gains nothing. That
+        is deliberate: a subclass that cannot batch inherits working behaviour
+        rather than a wrong answer, and :attr:`supports_true_batching` tells the
+        caller which it got, so a throughput claim is never made on the strength of
+        a fake batch.
+        """
+        return [self.raw_candidates(f) for f in frames]
+
+    #: Whether :meth:`raw_candidates_batch` is a real batched forward pass.
+    supports_true_batching: bool = False
+
     # -- public ------------------------------------------------------------
 
     def recognize(self, frame: np.ndarray) -> pp.GateResult:
@@ -337,9 +352,56 @@ class IndustrialRecognizer(ComponentDetector):
         cands = self.raw_candidates(frame)
         return pp.run(cands, frame.shape[:2], self.gate_config())
 
-    def infer(self, frame: np.ndarray) -> list[Detection]:
-        """:class:`ComponentDetector` interface used by the live pipeline."""
-        result = self.recognize(frame)
+    def recognize_batch(self, frames: Sequence[np.ndarray],
+                        batch_size: int = 8) -> list[pp.GateResult]:
+        """Recognise several frames, batching the forward pass where possible.
+
+        Returns one :class:`~rtsp_backend.electrical.postprocess.GateResult` per
+        input frame, in order. Post-processing stays per-frame because the
+        geometric plausibility gate is relative to each image's own dimensions —
+        batching that would apply one panel's geometry to another's boxes.
+
+        Not used by the RTSP path on purpose: panel inspection is not a real-time
+        problem (a cabinet does not change between frames), so buffering frames to
+        fill a batch would add latency for no accuracy gain. This exists for
+        folder-scale work — re-scoring an archive, or an auto-annotation pass over
+        a capture batch.
+        """
+        if not self._ready:
+            self.load()
+        if not frames:
+            return []
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+        cfg = self.gate_config()
+        out: list[pp.GateResult] = []
+        for start in range(0, len(frames), batch_size):
+            chunk = list(frames[start:start + batch_size])
+            try:
+                per_frame = self.raw_candidates_batch(chunk)
+            except Exception:
+                # A batched path that fails must not lose the whole chunk; fall
+                # back to per-frame inference so the caller still gets results.
+                _log.exception("batched inference failed; falling back to "
+                               "per-frame for this chunk")
+                per_frame = [self.raw_candidates(f) for f in chunk]
+            if len(per_frame) != len(chunk):
+                raise RuntimeError(
+                    f"{type(self).__name__}.raw_candidates_batch returned "
+                    f"{len(per_frame)} result(s) for {len(chunk)} frame(s); "
+                    f"results would be misattributed to the wrong images")
+            for frame, cands in zip(chunk, per_frame):
+                out.append(pp.run(cands, frame.shape[:2], cfg))
+        return out
+
+    def infer_batch(self, frames: Sequence[np.ndarray],
+                    batch_size: int = 8) -> list[list[Detection]]:
+        """Batched :class:`ComponentDetector` interface."""
+        return [self._to_detections(r)
+                for r in self.recognize_batch(frames, batch_size)]
+
+    def _to_detections(self, result: pp.GateResult) -> list[Detection]:
         out: list[Detection] = []
         for c in result.accepted:
             sp = tax.spec(c.class_id)
@@ -352,8 +414,13 @@ class IndustrialRecognizer(ComponentDetector):
         self._last_diagnostics = result.diagnostics.to_dict()
         return out
 
+    def infer(self, frame: np.ndarray) -> list[Detection]:
+        """:class:`ComponentDetector` interface used by the live pipeline."""
+        return self._to_detections(self.recognize(frame))
+
     def status(self) -> dict:
         st = super().status()
+        st["supports_true_batching"] = bool(self.supports_true_batching)
         st["diagnostics"] = getattr(self, "_last_diagnostics", None)
         st["class_count"] = len(getattr(self, "class_names", ()) or ())
         st["class_source"] = getattr(self, "class_source", None)
@@ -525,31 +592,62 @@ class UltralyticsIndustrialRecognizer(IndustrialRecognizer):
             self._error = f"failed to load checkpoint: {exc}"
             raise RuntimeError(self._error)
 
-    def raw_candidates(self, frame: np.ndarray) -> list[pp.Candidate]:
+    #: Ultralytics batches a list source in one forward pass, so this is real.
+    supports_true_batching = True
+
+    def _predict(self, source):
         floor = float(self.params.get("decode_floor", 0.10))
-        res = self._model.predict(
-            source=frame, conf=floor, iou=0.7, verbose=False,
+        return self._model.predict(
+            source=source, conf=floor, iou=0.7, verbose=False,
             imgsz=int(self.params.get("imgsz", 640)),
             device=("cuda" if str(self.params.get("device", "cpu")).lower()
                     in ("gpu", "cuda") else "cpu"),
         )
+
+    def _decode(self, result) -> list[pp.Candidate]:
+        """One Ultralytics Result → candidates. Shared by single and batched paths
+        so the two can never decode differently."""
+        boxes = getattr(result, "boxes", None)
+        if boxes is None:
+            return []
+        xyxy = boxes.xyxy.cpu().numpy()
+        conf = boxes.conf.cpu().numpy()
+        cls = boxes.cls.cpu().numpy().astype(int)
         cands: list[pp.Candidate] = []
-        for r in res or []:
-            boxes = getattr(r, "boxes", None)
-            if boxes is None:
-                continue
-            xyxy = boxes.xyxy.cpu().numpy()
-            conf = boxes.conf.cpu().numpy()
-            cls = boxes.cls.cpu().numpy().astype(int)
-            for b, s, cid in zip(xyxy, conf, cls):
-                raw = (self.class_names[cid] if cid < len(self.class_names)
-                       else str(cid))
-                canon = (self.canonical[cid] if cid < len(self.canonical) else None)
-                cands.append(pp.Candidate(
-                    class_id=canon or tax.UNKNOWN_COMPONENT_ID,
-                    score=float(s), box=tuple(float(v) for v in b),
-                    source=self.backend_id, raw_label=raw))
+        for b, s, cid in zip(xyxy, conf, cls):
+            raw = (self.class_names[cid] if cid < len(self.class_names)
+                   else str(cid))
+            canon = (self.canonical[cid] if cid < len(self.canonical) else None)
+            cands.append(pp.Candidate(
+                class_id=canon or tax.UNKNOWN_COMPONENT_ID,
+                score=float(s), box=tuple(float(v) for v in b),
+                source=self.backend_id, raw_label=raw))
         return cands
+
+    def raw_candidates(self, frame: np.ndarray) -> list[pp.Candidate]:
+        cands: list[pp.Candidate] = []
+        for r in self._predict(frame) or []:
+            cands.extend(self._decode(r))
+        return cands
+
+    def raw_candidates_batch(self, frames: Sequence[np.ndarray]
+                             ) -> list[list[pp.Candidate]]:
+        """One forward pass over the whole chunk.
+
+        Ultralytics returns one Result per input, in order. That ordering is the
+        entire correctness requirement here — a mismatch would attribute one
+        panel's detections to another image — so the count is checked and a
+        mismatch falls back to per-frame inference rather than guessing the
+        pairing.
+        """
+        results = self._predict(list(frames)) or []
+        if len(results) != len(frames):
+            _log.warning(
+                "ultralytics returned %d result(s) for %d frame(s); falling back "
+                "to per-frame inference so detections are not misattributed",
+                len(results), len(frames))
+            return [self.raw_candidates(f) for f in frames]
+        return [self._decode(r) for r in results]
 
 
 # --------------------------------------------------------------------------

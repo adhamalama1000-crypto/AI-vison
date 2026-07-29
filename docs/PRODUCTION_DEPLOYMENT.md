@@ -51,8 +51,15 @@ models/components/
 ├── best.pt            # Ultralytics checkpoint (GPU, fine-tuning)
 ├── labels.txt         # one canonical class id per line, training index order
 ├── classes.json       # authoritative label order (preferred by the runtime)
-└── model_card.json    # what was trained, on what, and what it cannot do
+├── model_card.json    # what was trained, on what, and what it cannot do
+├── metrics.json       # measured accuracy: headline, per-class, curves, runtime
+└── artifacts/         # confusion matrix, PR/F1 curves, loss curves, args.yaml
 ```
+
+`metrics.json` and `artifacts/` are the audit trail. They are not optional in
+practice: without them, nobody can answer "what was this model's recall on
+contactors?" after the training box has been recycled. `install_bundle` copies them
+alongside the weights for exactly that reason.
 
 The runtime resolves labels in this order: explicit `labels` param →
 `classes.json` → `labels.txt` (**only if it does not look like bare integers**) →
@@ -221,6 +228,89 @@ panel classified as a motor-control centre with no overload relay is probably
 missing one. Each entry carries its own reasoning and confidence. Do not present it
 to users as a detection.
 
+### Risk level
+
+The report also carries an aggregate risk assessment:
+
+```json
+{
+  "risk": {
+    "level": "elevated",
+    "score": 6.5,
+    "confidence": "high",
+    "assessable": true,
+    "headline": "4 risk indicator(s), 2 important, including 1 safety-critical device not detected. Risk level: ELEVATED (score 6.5).",
+    "drivers": [
+      {"code": "missing_emergency_stop", "category": "missing_protection",
+       "severity": "important", "weight": 4.5,
+       "message": "... This is a safety-critical device."}
+    ],
+    "recommendations": ["PRIORITY: verify by eye whether ..."],
+    "limits": ["..."]
+  }
+}
+```
+
+Four properties of this output matter operationally, and they are all deliberate:
+
+1. **`level` is `"unknown"`, never `"low"`, when there is no basis to score.** No
+   model loaded, nothing detected, or more than half the detections unidentified all
+   produce `unknown` with `assessable: false`. "We found nothing wrong" and "we could
+   not look" read identically to somebody skimming a report while meaning opposite
+   things — and somebody may decide not to open a cabinet based on this. **Do not
+   render `unknown` as a green badge.** Grey or amber; never a pass.
+2. **The score is the sum of its `drivers`.** No hidden terms, no learned weights.
+   "Why is this elevated?" is answerable from the JSON alone, and the weights in
+   `rtsp_backend/electrical/risk.py` are declared engineering judgements you can
+   change.
+3. **Detection quality is itself a driver.** A panel where 30% of devices came back
+   unidentified scores higher *and* carries a `limits` entry saying the
+   missing-component findings are weakened — one of the unknowns may be the device
+   reported absent.
+4. **It adds no findings of its own.** It only weighs what the detector and rule
+   engine already found. A clean panel scores 0.0 with an empty `drivers` list.
+
+`confidence` is the assessment's confidence in *itself* (`high`/`moderate`/`low`),
+lowered by unidentified detections, low mean confidence, too few devices to treat an
+absence as evidence, or an unclassifiable panel type. When it is `low` the headline
+says so in capitals, and a low score explicitly does **not** claim a clean panel.
+
+The PDF renders the level first, colour-coded, with the recommendations and the
+limits — `unknown` renders grey, not green.
+
+### `POST /api/panel/analyze/batch`
+
+For folder-scale work: re-scoring an archive, or checking a capture batch.
+
+```bash
+curl -X POST localhost:8000/api/panel/analyze/batch \
+     -F files=@p1.jpg -F files=@p2.jpg -F files=@p3.jpg \
+     -G --data-urlencode 'batch_size=8'
+```
+
+Per-image results are identical to `/analyze` — same engine, same thresholds, same
+post-processing gate. Only throughput differs, and only on a backend with a real
+batched forward pass. `true_batching` in the response says which you got; when it is
+`false` the images were processed sequentially and a `note` says so, so a timing
+number is never presented as a batching win when it is not one.
+
+Capped at 50 images per request (unbounded batching is a memory-exhaustion vector).
+One undecodable file is reported in `rejected` and the rest of the batch proceeds.
+`report=false` is the default because for a 50-image batch the full reports dominate
+the response.
+
+**Batching is deliberately not used on the RTSP path.** Panel inspection is not a
+real-time problem — a cabinet does not change between frames — so buffering frames to
+fill a batch would add latency for no accuracy benefit. Analyse one frame every few
+seconds per camera instead.
+
+Same thing from the CLI, with throughput measurement:
+
+```bash
+python -m training.electrical.cli analyse-batch --images captures/ \
+    --backend industrial_onnx --batch 8
+```
+
 ### Supporting endpoints
 
 ```bash
@@ -338,34 +428,132 @@ installed but broken", which look identical in the UI (both show zero components
 - **Inference latency.** A sudden increase usually means GPU fallback to CPU or
   thread over-subscription, not a model change.
 
-### The improvement loop
+---
 
-Every `unknown_industrial_component` in production is a labelled example the model
-is asking for:
+## Model update guide
+
+The procedure for replacing a deployed model, end to end. Because `CLASS_ORDER` is
+append-only, a retrained model is a drop-in replacement — but the steps below are
+what stop a "drop-in" from silently mislabelling everything.
+
+### 1. Gather the new data
+
+Every `unknown_industrial_component` returned in production is a labelled example the
+model is asking for. Collect those crops, plus captures of whatever `cli gap` still
+reports as short.
 
 ```bash
+python -m training.electrical.cli gap --root data/final --priority-only
 python -m training.electrical.cli autolabel --images new_captures/ --out data/round2
-# correct in a labelling tool, then
-python -m training.electrical.cli split --src data/round2 --dst data/final_v2
-python -m training.electrical.cli train --data data/final_v2/dataset.yaml --arch yolo11s --device 0
-python -m training.electrical.cli export --weights .../best.pt --out dist/model_v2 --install
+# → correct in a labelling tool, working autolabel_manifest.json's review_queue first
 ```
 
-Because `CLASS_ORDER` is append-only, a retrained model is a drop-in replacement:
-copy the bundle in and reload the backend. Keep the previous bundle to roll back to —
-and roll back on **measured per-class regression**, not on a lower headline mAP,
-which moves for uninteresting reasons when the validation set changes.
+### 2. Rebuild the dataset
+
+```bash
+python -m training.electrical.cli merge --roots data/final data/round2 \
+    --dst data/merged_v2 --dedup
+python -m training.electrical.cli split --src data/merged_v2_dedup --dst data/final_v2
+python -m training.electrical.cli gap --root data/final_v2
+```
+
+Deduplicate. New captures of a panel you already have will otherwise land in both
+train and val, and the v2 metrics will look better than v1 for reasons that have
+nothing to do with the model.
+
+Keep `data/final` — reproducing the *old* model is the only way to attribute a
+regression to the data rather than the training run.
+
+### 3. Train and compare on the same footing
+
+```bash
+python -m training.electrical.cli train --data data/final_v2/dataset.yaml \
+    --arch yolo11s --epochs 120 --device 0
+
+# score the NEW model and the OLD model on the SAME validation split
+python -m training.electrical.cli eval --root data/final_v2 \
+    --backend industrial_ultralytics \
+    --params '{"weights":"runs/electrical/yolo11s/weights/best.pt"}' > dist/eval_v2.json
+python -m training.electrical.cli eval --root data/final_v2 \
+    --backend industrial_onnx \
+    --params '{"weights":"/srv/ai-vision/models/components/best.onnx"}' > dist/eval_v1.json
+```
+
+Both on `final_v2`. Comparing v2-on-v2 against v1-on-v1 compares two different
+questions and tells you nothing.
+
+### 4. Decide on per-class recall, not headline mAP
+
+Headline mAP moves for uninteresting reasons when the validation set changes — a new
+class appearing, or a rare class gaining val instances, shifts the mean without any
+model change. Compare the per-class tables in the two `eval` outputs and ask:
+
+- Did any class that was working get **worse**? That is a regression, whatever the
+  mean did.
+- Did the classes you collected data for actually improve? If not, the labelling is
+  more likely at fault than the training.
+- Are there classes still absent from val? Those remain unvalidated in v2 too.
+
+### 5. Export, verify, stage
+
+```bash
+python -m training.electrical.cli export \
+    --weights runs/electrical/yolo11s/weights/best.pt \
+    --out dist/model_v2 --imgsz 960 --data data/final_v2/dataset.yaml \
+    --eval-json dist/eval_v2.json --notes "v2: +410 field captures, adds VFD/SMPS"
+
+python -m training.electrical.cli verify --bundle dist/model_v2
+```
+
+`verify` must report `ok: true` before this goes anywhere near production.
+
+### 6. Install atomically, keeping the rollback
+
+```bash
+cd /srv/ai-vision/models
+rm -rf components.prev && cp -r components components.prev   # keep the rollback
+python -m training.electrical.cli export --weights ... --out dist/model_v2 --install
+python -m training.electrical.cli verify --bundle components
+curl -X POST localhost:8000/api/ai/models/components \
+     -H 'Content-Type: application/json' -d '{"backend_id":"industrial_onnx"}'
+curl localhost:8000/api/panel/model     # confirm it loaded, and which weights
+```
+
+Copy the whole bundle or none of it. A half-copied bundle — new `best.onnx` with the
+old `labels.txt` — is exactly the class-count mismatch that shifts every label by one,
+and it is invisible until somebody notices a contactor being reported as a relay.
+
+### 7. Watch the first day
+
+- **Unknown rate** (`report.confidence.identification_rate`) should not get worse. If
+  it does, v2 is less confident on real field imagery than the validation split
+  suggested — which usually means the new training data was less diverse than it
+  looked.
+- **Components per panel** against the as-built BOM on a few known panels.
+- **Latency**, in case the architecture or image size changed.
 
 ### Rollback
 
 ```bash
-cp -r /srv/ai-vision/models/components.prev/* /srv/ai-vision/models/components/
+rm -rf /srv/ai-vision/models/components
+cp -r /srv/ai-vision/models/components.prev /srv/ai-vision/models/components
 python -m training.electrical.cli verify --bundle /srv/ai-vision/models/components
 curl -X POST localhost:8000/api/ai/models/components -d '{"backend_id":"industrial_onnx"}'
 ```
 
-Always `verify` after a rollback. A half-copied bundle — new `best.onnx`, old
-`labels.txt` — is precisely the class-count mismatch that mislabels everything.
+Always `verify` after a rollback, for the same half-copied-bundle reason.
+
+### Adding a class
+
+Append a `ComponentSpec` to `rtsp_backend/electrical/taxonomy.py` — **append only**,
+never insert, or every existing checkpoint's class indices become wrong. Give it its
+function, role, mounting, geometric priors, aliases and zero-shot prompts; the class
+id alone is not enough for the rest of the system to reason about the device. Then
+regenerate `models/components/classes.json`, collect data for it, and retrain.
+
+An older bundle with fewer classes stays valid: `verify` recognises a proper prefix of
+`CLASS_ORDER` and reports that the newer classes simply cannot be detected by that
+checkpoint.
 
 ---
 
@@ -383,6 +571,14 @@ Always `verify` after a rollback. A half-copied bundle — new `best.onnx`, old
 | GPU latency looks like CPU | Silent CPU fallback | `nvidia-smi` inside the container; `--gpus all` |
 | Slower with more threads | Thread over-subscription in a CPU-limited container | Set `OMP_NUM_THREADS` to the real allocation |
 | `no version component` on download | Upstream project has no generated version | Fork it, generate a version, pass `--locator your-workspace/project/1` |
+| Risk level shows `unknown` | No model loaded, nothing detected, or >50% unidentified | `assessable: false` and `headline` say which. **Not** a pass — do not render it green |
+| Risk `low` but `confidence: low` | Too few devices detected to treat an absence as evidence | Re-photograph the whole cabinet; the headline already says not to read it as a pass |
+| v2 model looks better but is worse on site | Duplicates leaked between the new and old data | Re-merge with `--dedup`, then re-evaluate both models on the same split |
+| `cli dedup` exits 1 | A duplicate group straddles train/val | Intended — that leakage inflates every metric. Run with `--dst` to fix |
+| SAM refinement accept rate is low | SAM is segmenting whole DIN-rail rows, not devices | Check `rejected_reasons`; if mostly `grew_beyond_limit`, use `--no-refine` |
+| HPO gains nothing over defaults | The dataset is the bottleneck, not the hyperparameters | The result says so explicitly; spend the compute on `cli gap`'s capture list |
+| Batch endpoint no faster | Backend has no real batched forward pass | `true_batching: false` in the response says so; `industrial_ultralytics` batches, ONNX does not |
+| `metrics.json` has null accuracy | Exported without `--eval-json` | Run `cli eval`, re-export. A model with no accuracy record cannot be audited |
 
 ---
 

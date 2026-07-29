@@ -36,7 +36,6 @@ every training call reports ``skipped`` with the reason.
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -57,6 +56,22 @@ SUPPORTED_ARCHS: tuple[str, ...] = (
 CONDITIONAL_ARCHS: frozenset[str] = frozenset({"yolo12n", "yolo12s", "yolo12m"})
 
 DEFAULT_ARCH = "yolo11s"
+
+
+class TrainingAborted(RuntimeError):
+    """Raised by a training callback to stop a run early, on purpose.
+
+    :func:`train` catches every other exception and reports it as a failed result,
+    because one broken architecture must not abort a benchmark of six. This
+    exception is the documented exception to that rule: it propagates, so a caller
+    that deliberately stops a run — hyperparameter pruning, a user cancel — is not
+    told its run "failed".
+    """
+
+    def __init__(self, reason: str, value: Optional[float] = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
 
 
 def ultralytics_available() -> tuple[bool, Optional[str]]:
@@ -175,8 +190,17 @@ class TrainResult:
 
 
 def train(cfg: TrainConfig, export_onnx: bool = True,
-          log: Optional[Callable[[str], None]] = None) -> TrainResult:
-    """Train one architecture. Returns a result even on failure — never raises."""
+          log: Optional[Callable[[str], None]] = None,
+          callbacks: Optional[dict] = None) -> TrainResult:
+    """Train one architecture. Returns a result even on failure — never raises.
+
+    ``callbacks`` maps an Ultralytics callback event name to a callable, e.g.
+    ``{"on_fit_epoch_end": fn}``. This is what makes per-epoch hyperparameter
+    pruning possible (:mod:`training.electrical.hpo`): without an intermediate
+    signal a pruner has nothing to prune on, because training is one blocking call.
+    A callback that raises propagates — which is deliberate, since that is how
+    Optuna's ``TrialPruned`` escapes a training run.
+    """
     say = log or (lambda m: None)
     ok, version = ultralytics_available()
     if not ok:
@@ -202,6 +226,8 @@ def train(cfg: TrainConfig, export_onnx: bool = True,
         stem = f"{cfg.arch}.pt" if cfg.pretrained else f"{cfg.arch}.yaml"
         say(f"[{cfg.arch}] loading {stem}")
         model = Model(stem)
+        for event, fn in (callbacks or {}).items():
+            model.add_callback(event, fn)
         say(f"[{cfg.arch}] training for {cfg.epochs} epoch(s) at {cfg.imgsz}px")
         results = model.train(**cfg.to_kwargs())
 
@@ -231,6 +257,10 @@ def train(cfg: TrainConfig, export_onnx: bool = True,
                             if isinstance(v, (int, float))}
         return TrainResult(cfg.arch, "trained", None, weights, onnx_path,
                            time.perf_counter() - started, metrics_dict)
+    except TrainingAborted:
+        # Deliberate early stop (hyperparameter pruning, user cancel). Not a
+        # failure, and the caller needs to distinguish the two.
+        raise
     except Exception as exc:
         return TrainResult(cfg.arch, "failed", f"{type(exc).__name__}: {exc}",
                            None, None, time.perf_counter() - started)
@@ -382,15 +412,62 @@ def evaluate_zero_shot(dataset_root: str, split: str = "val",
 # benchmark
 # --------------------------------------------------------------------------
 
+def profile_trained(weights: str, dataset_root: str, label: str,
+                    split: str = "val", imgsz: int = 960,
+                    device: str = "cpu", warmup: Optional[int] = None,
+                    runs: Optional[int] = None,
+                    log: Optional[Callable[[str], None]] = None):
+    """Measure runtime characteristics of a trained checkpoint.
+
+    Kept here rather than in :mod:`training.electrical.bench` so that module stays
+    free of backend-loading concerns and can profile any already-loaded backend.
+    """
+    from . import bench as bm
+    from rtsp_backend.ai import registry
+    from rtsp_backend import electrical  # noqa: F401  (registers backends)
+
+    try:
+        cls = registry.get("components", "industrial_ultralytics")
+        inst = cls(weights=weights, imgsz=imgsz, device=device)
+        inst.load()
+    except Exception as exc:
+        return bm.RuntimeProfile(label=label, status="skipped",
+                                 reason=f"{type(exc).__name__}: {exc}",
+                                 device=device)
+    return bm.profile_backend(
+        inst, os.path.join(dataset_root, "images", split), label,
+        warmup=warmup if warmup is not None else bm.DEFAULT_WARMUP,
+        runs=runs if runs is not None else bm.DEFAULT_RUNS,
+        device=device, log=log)
+
+
 def benchmark(dataset_yaml: str, dataset_root: str,
               archs: Sequence[str] = ("yolo11s", "yolov8s", "rtdetr-l"),
               epochs: int = 60, imgsz: int = 960, batch: int = 8,
               device: str = "cpu", split: str = "val",
+              measure_runtime: bool = True,
+              runs: Optional[int] = None,
+              latency_budget_ms: Optional[float] = None,
+              weights: Optional[dict] = None,
+              min_map_50_95: float = 0.0,
               log: Optional[Callable[[str], None]] = None) -> dict:
-    """Train each architecture on the same data and rank them by measured mAP."""
+    """Train each architecture on one split, then rank on accuracy AND speed.
+
+    Ranking on mAP alone reliably picks the largest model, which for a platform
+    whose default deployment is CPU ONNX Runtime is usually the wrong call — a few
+    points of mAP for several times the latency is a bad trade on a 4-core box.
+    So each trained checkpoint is also profiled for latency, throughput and memory,
+    and :func:`training.electrical.bench.select_best` makes one decision that states
+    what it traded away.
+
+    ``measure_runtime=False`` reverts to accuracy-only ranking.
+    """
     say = log or (lambda m: None)
+    from . import bench as bm
+
     trained: dict[str, TrainResult] = {}
     reports: dict[str, dict] = {}
+    profiles: dict[str, dict] = {}
 
     for arch in archs:
         cfg = TrainConfig(data=dataset_yaml, arch=arch, epochs=epochs,
@@ -409,24 +486,47 @@ def benchmark(dataset_yaml: str, dataset_root: str,
             reports[arch] = rep
             say(f"[{arch}] mAP@50 {rep['map_50']:.3f}  "
                 f"mAP@50-95 {rep['map_50_95']:.3f}  F1 {rep['overall']['f1']:.3f}")
+        if measure_runtime:
+            profiles[arch] = profile_trained(
+                res.weights, dataset_root, arch, split=split, imgsz=imgsz,
+                device=device, runs=runs, log=say).to_dict()
 
     comparison = em.compare_models(reports) if reports else {
         "ranking": [], "winner": None,
         "criterion": "mAP@0.5:0.95, then F1"}
+
+    selection = bm.select_best(
+        reports, profiles, weights=weights,
+        latency_budget_ms=(latency_budget_ms
+                           if latency_budget_ms is not None
+                           else bm.DEFAULT_LATENCY_BUDGET_MS),
+        min_map_50_95=min_map_50_95)
+
     return {
         "training": {a: r.to_dict() for a, r in trained.items()},
         "evaluation": reports,
+        "runtime": profiles,
+        # Accuracy-only ranking, kept so the accuracy view is still available.
         "comparison": comparison,
         "table": em.format_table(comparison),
+        # The combined decision, and the one to act on.
+        "selection": selection,
+        "runtime_table": (bm.format_profile_table(profiles) if profiles
+                          else "runtime not measured"),
+        "selection_table": bm.format_selection_table(selection),
+        "recommended_arch": selection.get("winner"),
         "note": ("Architectures reported as 'skipped' were not silently "
                  "substituted — they are genuinely unavailable in this "
-                 "environment."),
+                 "environment. 'comparison' ranks on accuracy alone; "
+                 "'selection' is the deployment decision and accounts for "
+                 "latency and memory too."),
     }
 
 
 __all__ = [
-    "SUPPORTED_ARCHS", "CONDITIONAL_ARCHS", "DEFAULT_ARCH", "TrainConfig",
+    "SUPPORTED_ARCHS", "CONDITIONAL_ARCHS", "DEFAULT_ARCH", "TrainingAborted",
+    "TrainConfig",
     "TrainResult", "ultralytics_available", "arch_available", "train",
     "collect_predictions", "load_ground_truth", "evaluate_backend",
-    "evaluate_zero_shot", "benchmark",
+    "evaluate_zero_shot", "profile_trained", "benchmark",
 ]
