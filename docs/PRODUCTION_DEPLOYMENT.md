@@ -278,6 +278,44 @@ says so in capitals, and a low score explicitly does **not** claim a clean panel
 The PDF renders the level first, colour-coded, with the recommendations and the
 limits — `unknown` renders grey, not green.
 
+### Report formats
+
+```bash
+curl -X POST 'localhost:8000/api/panel/analyze?csv=true&pdf=true' -F file=@panel.jpg
+```
+
+```json
+{"exports": {
+  "json": "reports/panel_1730000000000.json",
+  "pdf": "reports/panel_1730000000000.pdf",
+  "csv_components": "reports/panel_1730000000001.csv",
+  "csv_summary": "reports/panel_summary_1730000000002.csv"
+}}
+```
+
+Fetch any of them from `/api/media/<path>`.
+
+| Format | Contents |
+|---|---|
+| JSON | The complete inspection result — everything the engine produced |
+| PDF | Risk level (colour-coded), annotated image, counts, recommendations, limits |
+| `csv_components` | **One row per detected device**: class, confidence, xyxy, size, position, row, manufacturer, part number, nameplate text, purpose |
+| `csv_summary` | Sectioned: panel, risk, bill of materials, possible-missing, risk drivers, recommendations, maintenance notes, limits |
+
+The per-component CSV is the one to paste next to an as-built bill of materials and diff
+the counts. It is one row per *device* rather than per component type, because the
+position and nameplate columns are per device and are the reason to open it in a
+spreadsheet at all.
+
+Both CSVs are written through Python's `csv` module, so a nameplate string containing a
+comma, a quote or a newline is quoted correctly instead of corrupting the row — OCR
+output routinely contains all three, and the corruption is invisible until somebody
+opens the file.
+
+The summary CSV's `risk`/`assessable` row carries `false means no basis to score — NOT
+a pass` in its detail column, so a reader of the CSV alone is not misled by a
+`level=unknown`.
+
 ### `POST /api/panel/analyze/batch`
 
 For folder-scale work: re-scoring an archive, or checking a capture batch.

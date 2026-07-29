@@ -36,7 +36,9 @@ every training call reports ``skipped`` with the reason.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional, Sequence
@@ -56,6 +58,54 @@ SUPPORTED_ARCHS: tuple[str, ...] = (
 CONDITIONAL_ARCHS: frozenset[str] = frozenset({"yolo12n", "yolo12s", "yolo12m"})
 
 DEFAULT_ARCH = "yolo11s"
+
+
+@contextlib.contextmanager
+def quiet_stdout():
+    """Route a library's output to stderr for the duration of a block.
+
+    Ultralytics writes its banner, per-epoch table and export summary to stdout.
+    Every CLI subcommand here contracts to emit **JSON on stdout** so it can be piped
+    (``cli eval > eval.json``, then ``cli export --eval-json``), and that chatter
+    silently corrupts the JSON — which is exactly how the documented export pipe was
+    found to be broken.
+
+    Two mechanisms are needed, and the second is the one that actually matters:
+
+    1. ``redirect_stdout`` catches plain ``print`` calls.
+    2. Ultralytics emits most of its output through ``ultralytics.utils.LOGGER``,
+       a :mod:`logging` logger whose ``StreamHandler`` captured the *real*
+       ``sys.stdout`` at import time. ``redirect_stdout`` cannot reach that, because
+       the handler holds a direct reference to the original stream. Those handlers
+       are repointed at stderr and restored afterwards.
+
+    Nothing is suppressed — progress stays visible on stderr, where every other
+    human-facing message in this package already goes.
+    """
+    import logging
+
+    restore: list[tuple] = []
+    try:
+        from ultralytics.utils import LOGGER  # type: ignore
+
+        loggers = [LOGGER]
+    except Exception:
+        loggers = []
+    # The root logger can also carry a stdout handler installed by a dependency.
+    loggers.append(logging.getLogger())
+
+    for logger in loggers:
+        for handler in list(getattr(logger, "handlers", [])):
+            stream = getattr(handler, "stream", None)
+            if stream is not None and stream is not sys.stderr:
+                restore.append((handler, stream))
+                handler.stream = sys.stderr
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        for handler, stream in restore:
+            handler.stream = stream
 
 
 class TrainingAborted(RuntimeError):
@@ -154,7 +204,13 @@ class TrainConfig:
             "data": self.data, "epochs": self.epochs, "imgsz": self.imgsz,
             "batch": self.batch, "device": self.device, "workers": self.workers,
             "patience": self.patience, "seed": self.seed,
-            "project": self.project, "name": self.name or self.arch,
+            # Absolute, deliberately. Ultralytics resolves a RELATIVE project under
+            # its own settings' runs_dir/<task>, so "runs/electrical" became
+            # "runs/detect/runs/electrical" — which broke the documented artifact
+            # path and put training output somewhere other than where hpo.py keeps
+            # its study database. An absolute path is used verbatim.
+            "project": os.path.abspath(self.project),
+            "name": self.name or self.arch,
             "pretrained": self.pretrained, "optimizer": self.optimizer,
             "lr0": self.lr0, "cos_lr": self.cos_lr,
             "warmup_epochs": self.warmup_epochs,
@@ -225,11 +281,13 @@ def train(cfg: TrainConfig, export_onnx: bool = True,
         Model = RTDETR if cfg.arch.startswith("rtdetr") else YOLO
         stem = f"{cfg.arch}.pt" if cfg.pretrained else f"{cfg.arch}.yaml"
         say(f"[{cfg.arch}] loading {stem}")
-        model = Model(stem)
+        with quiet_stdout():
+            model = Model(stem)
         for event, fn in (callbacks or {}).items():
             model.add_callback(event, fn)
         say(f"[{cfg.arch}] training for {cfg.epochs} epoch(s) at {cfg.imgsz}px")
-        results = model.train(**cfg.to_kwargs())
+        with quiet_stdout():
+            results = model.train(**cfg.to_kwargs())
 
         save_dir = getattr(getattr(results, "save_dir", None), "__str__",
                            lambda: None)()
@@ -242,8 +300,9 @@ def train(cfg: TrainConfig, export_onnx: bool = True,
         if export_onnx and weights:
             say(f"[{cfg.arch}] exporting ONNX")
             try:
-                exported = Model(weights).export(format="onnx", imgsz=cfg.imgsz,
-                                                 opset=12, simplify=True)
+                with quiet_stdout():
+                    exported = Model(weights).export(
+                        format="onnx", imgsz=cfg.imgsz, opset=12, simplify=True)
                 onnx_path = str(exported) if exported else None
                 if onnx_path and os.path.exists(onnx_path):
                     _write_classes_json(os.path.dirname(onnx_path))

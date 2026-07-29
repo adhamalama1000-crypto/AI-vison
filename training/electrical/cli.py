@@ -139,6 +139,29 @@ def cmd_split(args) -> int:
     return 0
 
 
+def cmd_quality(args) -> int:
+    """Structural and image-quality inspection of a dataset."""
+    from training.electrical import quality as ql
+
+    if args.dst:
+        out = ql.clean(args.root, args.dst,
+                       drop_warnings=tuple(args.drop_warnings or ()),
+                       quarantine=not args.no_quarantine, log=_stderr)
+        _dump(out)
+        report = out["quality_report"]
+    else:
+        rep = ql.inspect(args.root, check_pixels=not args.no_pixels,
+                         log=_stderr)
+        report = rep.to_dict()
+        _dump(report)
+
+    _stderr("\n" + report["verdict"])
+    for rec in report["recommendations"]:
+        _stderr(f"\n- {rec}")
+    # Unusable files are a hard failure: training on them wastes the run.
+    return 1 if report["fatal_count"] else 0
+
+
 def cmd_gap(args) -> int:
     """Exactly what is missing: classes, annotations, images, what to collect."""
     analysis = None
@@ -507,10 +530,13 @@ def cmd_eval(args) -> int:
     rep = tr.evaluate_backend(args.backend, args.root, args.split, params,
                               limit=args.limit)
     if rep.get("status") != "evaluated":
-        print(f"skipped: {rep.get('reason')}", file=sys.stderr)
+        _stderr(f"skipped: {rep.get('reason')}")
         _dump(rep)
         return 1
-    print(em.format_table(em.compare_models({args.backend: rep})))
+    # The table is for a human and goes to stderr; stdout stays pure JSON so that
+    # `cli eval ... > eval.json` is machine-readable. It previously went to stdout,
+    # which broke exactly the `--eval-json` pipe the export step documents.
+    _stderr(em.format_table(em.compare_models({args.backend: rep})))
     _dump(rep)
     return 0
 
@@ -585,6 +611,23 @@ def build_parser() -> argparse.ArgumentParser:
                          "time.")
     ap.add_argument("--symlink", action="store_true")
     ap.set_defaults(func=cmd_split)
+
+    ap = sub.add_parser("quality",
+                        help="corrupted files, bad labels, low-quality images, "
+                             "class balance; exits non-zero on unusable files")
+    ap.add_argument("--root", required=True)
+    ap.add_argument("--dst", help="write a cleaned dataset here (rejects go to "
+                                  "quarantine/, nothing is deleted)")
+    ap.add_argument("--drop-warnings", nargs="*",
+                    help="also drop files with these warning codes, e.g. blurred "
+                         "too_dark. OFF by default: a dim panel photograph is real "
+                         "deployment input, and filtering on image statistics throws "
+                         "away the hardest training examples")
+    ap.add_argument("--no-quarantine", action="store_true",
+                    help="do not keep copies of rejected files")
+    ap.add_argument("--no-pixels", action="store_true",
+                    help="structural/label checks only; skip image decoding")
+    ap.set_defaults(func=cmd_quality)
 
     ap = sub.add_parser("gap",
                         help="what is missing: classes, annotations, images")

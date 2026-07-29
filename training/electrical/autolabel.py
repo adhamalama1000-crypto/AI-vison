@@ -23,8 +23,8 @@ in the review manifest:
     At least one box landed between the review and accept thresholds. A human
     must look at this image properly.
 ``uncertain``
-    Boxes were found but the model was not confident about their classes; they are
-    written as ``unknown_industrial_component`` rather than guessed into a class.
+    Boxes were found but the model could not classify them. They are preserved in a
+    per-image ``<stem>.unclassified.json`` sidecar, **not** in the YOLO label file.
 ``empty``
     Nothing was detected. An empty label file is written, because for a photograph
     that genuinely contains no target devices that is the correct label — but the
@@ -32,6 +32,26 @@ in the review manifest:
 
 Boxes below the review threshold are discarded entirely: a label file full of
 junk boxes is slower to fix than an empty one.
+
+Why unclassified boxes go in a sidecar
+--------------------------------------
+``unknown_industrial_component`` is deliberately **not** in
+:data:`~rtsp_backend.electrical.taxonomy.CLASS_ORDER`: it is the post-processor's
+honest fallback at inference time, not something a detector should be trained to
+predict. So it has no class index, and there is no valid way to write it into a YOLO
+label file — the only options would be to fabricate an index (corrupting the label
+space) or to drop the box.
+
+An earlier version of this module did neither cleanly: it looked the index up, got
+``None``, and silently discarded every unclassified box — while this docstring and the
+manifest both claimed the boxes were "written as unknown". Those boxes are the single
+most valuable thing in a review batch, because they are exactly where the model is
+blind, and they were being thrown away.
+
+They are now written to ``<stem>.unclassified.json`` beside the label file. The YOLO
+tree stays valid and trainable; the boxes survive for a human to classify through
+``/api/annotations``; and once classified they enter the exported labels with a real
+class. Nothing is fabricated and nothing is lost.
 
 The output is deliberately importable back into a labelling tool (Roboflow, CVAT,
 Label Studio all read YOLO), so the workflow is: auto-label → import → human
@@ -241,11 +261,13 @@ def autolabel_directory(image_dir: str, out_root: str,
                 "boxes, which are looser")
 
     idx = tax.class_index()
-    unknown_index = idx.get(tax.UNKNOWN_COMPONENT_ID)
+    # Deliberately NOT looked up as a class index — unknown has none, by design.
+    # Unclassified boxes go to a per-image sidecar; see the module docstring.
     verdicts: list[ImageVerdict] = []
     totals: Counter = Counter()
     unreadable: list[str] = []
     all_refinements: list = []
+    total_unclassified = 0
 
     for n, fn in enumerate(files, 1):
         path = os.path.join(image_dir, fn)
@@ -281,6 +303,7 @@ def autolabel_directory(image_dir: str, out_root: str,
         lines: list[str] = []
         scores: list[float] = []
         classes: Counter = Counter()
+        unclassified: list[dict] = []
         has_low = False
         has_unknown = False
 
@@ -290,15 +313,31 @@ def autolabel_directory(image_dir: str, out_root: str,
             # An honest unknown stays unknown. The whole point of this pass is to
             # save the labeller time, and a confidently-wrong class label costs
             # more time than an unlabelled box.
+            #
+            # It cannot go in the YOLO file: unknown has no class index by design
+            # (see the module docstring). It goes in the sidecar instead, so a human
+            # can classify it — losing it would throw away exactly the boxes that
+            # show where the model is blind.
             if cid == tax.UNKNOWN_COMPONENT_ID or cid not in idx:
                 has_unknown = True
-                if unknown_index is None:
+                x1, y1, x2, y2 = (float(v) for v in box[:4])
+                x1, x2 = max(0.0, min(x1, x2)), min(float(w), max(x1, x2))
+                y1, y2 = max(0.0, min(y1, y2)), min(float(h), max(y1, y2))
+                if (x2 - x1) <= 1.0 or (y2 - y1) <= 1.0:
                     discarded += 1
                     continue
-                class_index = unknown_index
-                cid = tax.UNKNOWN_COMPONENT_ID
-            else:
-                class_index = idx[cid]
+                unclassified.append({
+                    "bbox": [round(x1, 1), round(y1, 1), round(x2, 1),
+                             round(y2, 1)],
+                    "norm": {"cx": round((x1 + x2) / 2 / w, 6),
+                             "cy": round((y1 + y2) / 2 / h, 6),
+                             "w": round((x2 - x1) / w, 6),
+                             "h": round((y2 - y1) / h, 6)},
+                    "confidence": round(float(score), 4),
+                    "raw_class_id": cid,
+                })
+                continue
+            class_index = idx[cid]
             line = _to_yolo_line(class_index, box, w, h)
             if line is None:
                 discarded += 1
@@ -307,9 +346,16 @@ def autolabel_directory(image_dir: str, out_root: str,
             scores.append(score)
             classes[cid] += 1
 
-        with open(os.path.join(d_lbl, os.path.splitext(fn)[0] + ".txt"), "w",
+        stem = os.path.splitext(fn)[0]
+        with open(os.path.join(d_lbl, stem + ".txt"), "w",
                   encoding="utf-8") as fh:
             fh.write("\n".join(lines) + ("\n" if lines else ""))
+        if unclassified:
+            with open(os.path.join(d_lbl, stem + ".unclassified.json"), "w",
+                      encoding="utf-8") as fh:
+                json.dump({"image": fn, "width": int(w), "height": int(h),
+                           "boxes": unclassified}, fh, indent=2)
+            total_unclassified += len(unclassified)
         if copy_images:
             shutil.copy2(path, os.path.join(d_img, fn))
         else:
@@ -365,24 +411,38 @@ def autolabel_directory(image_dir: str, out_root: str,
         "images_unreadable": unreadable,
         "boxes_written": int(sum(v.boxes for v in verdicts)),
         "boxes_discarded": int(sum(v.boxes_discarded for v in verdicts)),
+        "boxes_unclassified": total_unclassified,
         "by_verdict": dict(by_verdict),
         "instances_per_class": dict(totals.most_common()),
         "review_queue": [v.filename for v in queue],
         "per_image": [v.to_dict() for v in verdicts],
         "human_review_required": True,
+        "unclassified_sidecars": (
+            f"{total_unclassified} box(es) could not be classified and were written "
+            f"to <stem>.unclassified.json beside the labels, NOT into the YOLO label "
+            f"files. '{tax.UNKNOWN_COMPONENT_ID}' has no class index by design, so "
+            f"there is no honest way to put it in a label file — and discarding those "
+            f"boxes would throw away exactly the examples that show where the model "
+            f"is blind. Classify them through /api/annotations and they enter the "
+            f"exported labels with a real class."
+            if total_unclassified else
+            "No unclassified boxes: every detection above the review threshold "
+            "carried a taxonomy class."),
         "note": (
             f"{by_verdict.get('auto', 0)} image(s) were labelled confidently, "
             f"{by_verdict.get('review', 0)} need a review pass, "
             f"{by_verdict.get('uncertain', 0)} contain boxes the model could not "
-            f"classify (written as '{tax.UNKNOWN_COMPONENT_ID}'), and "
+            f"classify (kept in .unclassified.json sidecars), and "
             f"{by_verdict.get('empty', 0)} produced no detections. These are "
-            f"PRE-LABELS, not ground truth: import them into a labelling tool, "
-            f"correct them, and export before training. Training directly on "
-            f"un-reviewed output teaches the model its own mistakes."),
+            f"PRE-LABELS, not ground truth: review and correct them before "
+            f"training. Training directly on un-reviewed output teaches the model "
+            f"its own mistakes."),
         "next_step": (
-            f"Import {out_root} into Roboflow/CVAT/Label Studio as YOLO, work "
-            f"the review_queue first, then export and run: python -m "
-            f"training.electrical.cli split --src <exported> --dst data/final"),
+            f"Review in the dashboard — POST /api/annotations "
+            f"{{\"name\":\"round1\",\"root\":\"{out_root}\"}} then work the queue — "
+            f"or import {out_root} into Roboflow/CVAT/Label Studio as YOLO. Then "
+            f"export and run: python -m training.electrical.cli split "
+            f"--src <exported> --dst data/final"),
     }
     with open(os.path.join(out_root, "autolabel_manifest.json"), "w",
               encoding="utf-8") as fh:

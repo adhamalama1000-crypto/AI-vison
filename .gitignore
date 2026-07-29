@@ -23,6 +23,13 @@ models/**/labels.txt
 models/**/model_card.json
 runs/
 outputs/
+# Ultralytics downloads pretrained checkpoints into the CURRENT WORKING DIRECTORY on
+# first use (yolo11n.pt, sam2.1_b.pt, ...). They are multi-megabyte binaries fetched
+# on demand, never repository content.
+/*.pt
+/*.onnx
+/*.engine
+datasets/
 
 # Node / frontend
 node_modules/

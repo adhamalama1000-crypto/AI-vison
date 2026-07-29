@@ -1,5 +1,91 @@
 # Changelog
 
+## [5.4.0] — Verified by a real training run
+
+The pipeline was executed for real rather than reasoned about: torch 2.13 +
+ultralytics 8.4.110 installed, `yolo11n` trained for 8 epochs (250.7 s, CPU), exported
+to ONNX, verified, installed, and served through `POST /api/panel/analyze` at 70.9 ms
+per image. Full evidence table in
+[`docs/AUDIT_v5.2.0.md`](docs/AUDIT_v5.2.0.md).
+
+The resulting model is **not** in this repository. mAP50 of 0.0021 is the honest
+outcome for 8 epochs on 120 procedurally-generated images with a 54-class head; it is a
+pipeline-validation artifact, and shipping it as weights would be exactly the
+dishonesty the brief forbids.
+
+What the run proves matters more than the metric. With real weights loaded, the ONNX
+graph's maximum class score across all 8,400 anchors was 0.0011: the decoder extracted
+a real box, the gate rejected it as `below_unknown_floor`, the API returned
+`components: []`, and risk returned `unknown`/`assessable: false` rather than `low`.
+**The system declined to report rather than fabricate.** Lowering the gate produced 228
+genuine detections, every one demoted to `unknown_industrial_component` because class
+confidence never cleared a class threshold — the honest-unknown path working end to end.
+
+SAM2 was also validated with real weights (`sam2.1_b.pt`): a deliberately loose box
+`(225,125,365,310)` refined to `(249,149,333,285)` against a ground truth of
+`(250,150,330,280)` — within 5 px on every edge, 56% area reduction, guards accepted.
+
+### Six bugs the real run exposed
+
+None were findable without actually training a model.
+
+- **`runs/electrical/` did not exist.** Ultralytics resolves a relative `project` under
+  its own `runs_dir/<task>`, so artifacts landed in `runs/detect/runs/electrical/` —
+  not where the docs said, and not where `hpo.py` keeps its study database.
+  `TrainConfig` now passes an absolute path.
+- **`cli eval` corrupted its own JSON**, printing the human table to stdout before the
+  JSON — so the documented `cli eval > eval.json` → `cli export --eval-json` pipe could
+  never have worked. The table now goes to stderr.
+- **Ultralytics corrupted every JSON-emitting subcommand.** Its output goes to stdout
+  through a `logging` handler that captured the real `sys.stdout` at import time, which
+  `redirect_stdout` cannot reach. `train.quiet_stdout()` repoints those handlers.
+- **`api/annotations.py` could never load.** `from __future__ import annotations` sets
+  an attribute named `annotations` on the package, so `from . import annotations`
+  resolves to the `__future__` object rather than the submodule — and aliasing does not
+  help, because the attribute wins first. Renamed to `annotation_review.py`.
+- **Auto-annotation silently discarded every unclassified box** — 107 lost from 3
+  images on a measured run. It looked up a class index for
+  `unknown_industrial_component`, got `None` (that class is deliberately not
+  trainable), and dropped the box, while its docstring and manifest both claimed the
+  box had been written. Those are precisely the boxes that show where the model is
+  blind. They now go to a `.unclassified.json` sidecar, are surfaced for review, and
+  enter the export once a human names them.
+- **Installing ultralytics breaks OpenCV**: it pulls `opencv-python` alongside this
+  project's `opencv-python-headless`, and the shared `cv2` namespace loses
+  `CascadeClassifier`, breaking face detection. Documented in
+  `requirements-train.txt` with the fix.
+
+### New
+
+- **`training/electrical/quality.py`** + `cli quality` — the dataset checks that
+  otherwise train silently: unreadable images, unparseable labels, **class indices
+  outside the label space**, unnormalised (absolute-pixel) labels, degenerate and
+  whole-frame boxes, blur/exposure/resolution, and class balance. Exits non-zero on
+  unusable files. `--dst` writes a cleaned copy and quarantines rejects with reasons;
+  nothing is deleted. Low quality is a *warning*, kept by default — field panel
+  photography is badly lit by nature, and filtering on image statistics discards the
+  hardest and most valuable examples.
+- **CSV reports** — `reports_svc.panel_csv` (one row per device: class, confidence,
+  xyxy, position, row, manufacturer, part number, nameplate text) and
+  `panel_summary_csv` (panel, risk, BOM, missing, drivers, recommendations, limits).
+  Written through the `csv` module, so OCR text containing commas, quotes or newlines
+  is quoted instead of corrupting the row. `?csv=true&pdf=true` on `/api/panel/analyze`.
+- **`rtsp_backend/annotation_svc.py`** + `/api/annotations/*` — the human-correction
+  half of auto-annotation. Serves the worst-first review queue, records per-box
+  verdicts in the database (so a review survives a restart and two people can share a
+  batch), and re-exports corrected YOLO. Rejects a reclassification to a class id
+  outside the taxonomy. Excludes un-reviewed images from the export by default, and
+  excludes-and-lists anything a human flagged `needs_redraw` so it goes to a real
+  labelling tool rather than being fudged into the training set.
+- Root-level `*.pt` / `*.onnx` / `*.engine` and `datasets/` gitignored — Ultralytics
+  downloads pretrained checkpoints into the working directory on first use.
+
+### Tests
+
+688 → 750 passing. New suites for dataset quality (32) and CSV/annotation review (30);
+the HPO propagation tests were rewritten to exercise `train()`'s real exception handling
+via monkeypatch now that ultralytics is present, rather than skipping when it was absent.
+
 ## [5.3.0] — Closing the production gaps
 
 A full audit against the twelve-task production brief

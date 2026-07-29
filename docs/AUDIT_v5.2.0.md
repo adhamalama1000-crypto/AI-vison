@@ -266,6 +266,74 @@ HPO, benchmarking, dedup and model-update procedures.
 
 ---
 
+## Verified by a real end-to-end run
+
+The pipeline was executed for real — torch 2.13 + ultralytics 8.4.110 installed, a
+model actually trained, exported, installed and served. Not a dry run.
+
+| Step | Result |
+|---|---|
+| Dataset generated | 150 images / 5,570 instances / 28 classes |
+| Quality check | 0 fatal, 8 blurred warnings correctly flagged |
+| **Trained** | `yolo11n`, 8 epochs, 640px, CPU, **250.7 s** — box loss 1.01 → 0.70 |
+| Final metrics | mAP50 **0.0021**, precision 0.0097, recall 0.0094 |
+| ONNX export | real, 10.2 MB, output shape `(1, 58, 8400)` = 4 + 54 classes |
+| Bundle verify | `ok: true`, ONNX head 54 classes == 54 labels |
+| Artifacts harvested | 10, including Ultralytics' own confusion matrix and PR/F1/P/R curves |
+| Installed + served | `industrial_onnx`, `model.loaded: true` |
+| **Live inference** | `POST /api/panel/analyze` → HTTP 200, **70.9 ms** CPU |
+| Batch inference | 4 images, **36.2 ms/image** |
+| Reports | JSON + PDF + both CSVs written and fetchable via `/api/media` |
+| SAM2 refinement | `sam2.1_b.pt` loaded; loose box `(225,125,365,310)` → `(249,149,333,285)` against truth `(250,150,330,280)` — 56% area reduction, guards accepted |
+
+mAP of 0.002 is the *honest* outcome for 8 epochs on 120 procedurally-generated images
+with a 54-class head, and it is exactly why the artifact from this run is **not** in the
+repository. It is a pipeline-validation model, not a production one; shipping it as
+weights would be the dishonesty the brief forbids.
+
+**What that run proves matters more than the metric.** With real weights loaded, the
+ONNX graph's maximum class score across all 8,400 anchors was 0.0011. The decoder
+correctly extracted a real box; the post-processing gate correctly rejected it with
+`below_unknown_floor`; the API returned `components: []`; and the risk assessment
+returned `unknown` / `assessable: false` rather than `low`. **The system declined to
+report anything rather than fabricate.** Lowering the gate then produced 228 genuine
+detections across 6 images, every one demoted to `unknown_industrial_component`
+because class confidence never cleared a class threshold — the honest-unknown path
+working end to end under real conditions.
+
+### Bugs the real run exposed
+
+None of these were findable without actually training a model:
+
+1. **`runs/electrical/` did not exist.** Ultralytics resolves a *relative* `project`
+   under its own `runs_dir/<task>`, so artifacts landed in
+   `runs/detect/runs/electrical/` — not where the docs said, and not where `hpo.py`
+   keeps its study database. `TrainConfig.to_kwargs()` now passes an absolute path.
+2. **`cli eval` corrupted its own JSON.** It printed the human-readable table to
+   *stdout* before the JSON, so the `cli eval > eval.json` → `cli export --eval-json`
+   pipe documented in the training guide could never have worked. The table now goes to
+   stderr.
+3. **Ultralytics corrupted every JSON-emitting subcommand.** Its banner and progress
+   go to stdout via a `logging` handler that captured the real `sys.stdout` at import
+   time, which `contextlib.redirect_stdout` cannot reach. `train.quiet_stdout()` now
+   repoints those handlers at stderr for the duration of the call.
+4. **`api/annotations.py` could never load.** `from __future__ import annotations` sets
+   an attribute named `annotations` on the package module, so `from . import
+   annotations` resolves to the `__future__` feature object instead of the submodule —
+   aliasing does not help, because the attribute wins first. The module is now
+   `annotation_review.py`.
+5. **Auto-annotation silently discarded every unclassified box.** It looked up a class
+   index for `unknown_industrial_component`, got `None` (that class is deliberately not
+   trainable), and dropped the box — while its docstring and manifest both claimed the
+   boxes had been written. Measured on a real run: **107 boxes lost from 3 images**, and
+   they were precisely the boxes that show where the model is blind. They now go to a
+   `.unclassified.json` sidecar and are surfaced for review.
+6. **Installing ultralytics breaks OpenCV.** It depends on `opencv-python` while this
+   project pins `opencv-python-headless`; pip installs both, they share the `cv2`
+   namespace, and the result is missing `CascadeClassifier` and `cv2.data` — breaking
+   face detection. `opencv_guard.py` detects it; `requirements-train.txt` now documents
+   the fix.
+
 ## The thing the brief asks for that code cannot deliver
 
 The mission states the final system "must actually detect electrical components".

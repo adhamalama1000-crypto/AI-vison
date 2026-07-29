@@ -15,6 +15,18 @@ optuna>=3.4            # optional: hyperparameter optimisation (Part 5)
 # training install a CUDA torch build matching your driver FIRST, then this.
 # ultralytics>=8.3       # YOLOv11 / YOLOv8 / RT-DETR training + ONNX export
 #
+# WARNING — ultralytics depends on `opencv-python`, while this project pins
+# `opencv-python-headless`. pip will install BOTH, and the two share the `cv2`
+# namespace: the resulting import is missing CascadeClassifier and cv2.data, which
+# breaks face detection. rtsp_backend/opencv_guard.py detects it and prints the fix,
+# but it is easier to avoid. After installing ultralytics, run:
+#
+#   pip uninstall -y opencv-python opencv-python-headless
+#   pip install --force-reinstall "opencv-python-headless>=4.9,<5"
+#
+# Ultralytics will warn that opencv-python is missing; ignore it. Headless satisfies
+# `import cv2` at runtime and is the correct choice for a server with no display.
+#
 # Dataset acquisition. Both are optional:
 #   - roboflow: convenience SDK for training.electrical.download. Without it the
 #     module falls back to the REST export API using `requests`, which is already

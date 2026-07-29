@@ -457,11 +457,16 @@ def export_bundle(weights: str, out_dir: str,
             "no best.onnx in this bundle — the CPU ONNX runtime backend cannot "
             "load it. Export on a machine with ultralytics installed.")
     else:
+        from .train import quiet_stdout
+
         try:
             say(f"exporting ONNX at {imgsz}px, opset {opset}")
-            exported = YOLO(pt_dst).export(
-                format="onnx", imgsz=imgsz, opset=opset, simplify=simplify,
-                half=half, dynamic=dynamic)
+            # Ultralytics prints its banner and export summary to stdout, which would
+            # corrupt this command's JSON output. Redirected to stderr, not silenced.
+            with quiet_stdout():
+                exported = YOLO(pt_dst).export(
+                    format="onnx", imgsz=imgsz, opset=opset, simplify=simplify,
+                    half=half, dynamic=dynamic)
             src = str(exported) if exported else ""
             if src and os.path.exists(src):
                 onnx_path = os.path.join(out_dir, "best.onnx")

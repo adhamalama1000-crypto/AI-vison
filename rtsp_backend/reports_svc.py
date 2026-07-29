@@ -38,6 +38,124 @@ def _try_reportlab():
         return False
 
 
+#: Column order for the per-component CSV. Fixed and explicit so a spreadsheet or a
+#: downstream import script can rely on it across releases; new columns are appended.
+COMPONENT_CSV_COLUMNS: tuple[str, ...] = (
+    "index", "class_id", "component", "confidence", "category", "domain",
+    "x1", "y1", "x2", "y2", "width", "height",
+    "position", "row", "row_position",
+    "manufacturer", "product_family", "part_number",
+    "identification_basis", "nameplate_text", "purpose",
+)
+
+
+def _csv_rows_from_components(result: dict) -> list[list]:
+    rows: list[list] = []
+    for c in result.get("components") or []:
+        box = [float(v) for v in (c.get("bbox") or [0, 0, 0, 0])[:4]]
+        x1, y1, x2, y2 = box
+        rows.append([
+            c.get("index"), c.get("class_id"), c.get("title") or c.get("label"),
+            c.get("confidence"), c.get("category"), c.get("domain"),
+            round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1),
+            round(x2 - x1, 1), round(y2 - y1, 1),
+            c.get("position"), c.get("row"), c.get("row_position"),
+            c.get("manufacturer"), c.get("product_family"), c.get("part_number"),
+            c.get("identification_basis"), c.get("nameplate_text"),
+            c.get("purpose"),
+        ])
+    return rows
+
+
+def panel_csv(data_dir: str, result: dict, prefix: str = "panel") -> str:
+    """Write the per-component CSV — one row per detected device.
+
+    The spreadsheet format an engineer actually works in: paste it next to the
+    as-built bill of materials and diff the counts. Deliberately one row per
+    *device* rather than per component type, because the position and nameplate
+    columns are per device and are the reason to open it in a spreadsheet at all.
+
+    Uses :mod:`csv` so that a nameplate string containing a comma, a quote or a
+    newline is quoted correctly rather than corrupting the row — OCR output
+    routinely contains all three.
+    """
+    import csv
+
+    rel = f"reports/{_ts_name(prefix, 'csv')}"
+    path = os.path.join(data_dir, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(COMPONENT_CSV_COLUMNS)
+        writer.writerows(_csv_rows_from_components(result))
+    return rel
+
+
+def panel_summary_csv(data_dir: str, result: dict,
+                      prefix: str = "panel_summary") -> str:
+    """Write the summary CSV: bill of materials, missing components, risk drivers.
+
+    A second file rather than more columns on the first, because these are different
+    row types — a quantity per component type, an inferred absence, and a risk driver
+    do not share a schema, and forcing them into one table would leave most cells
+    empty. The ``section`` column makes it filterable in one sort.
+    """
+    import csv
+
+    rel = f"reports/{_ts_name(prefix, 'csv')}"
+    path = os.path.join(data_dir, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    report = result.get("report") or {}
+    risk = report.get("risk_assessment") or {}
+    panel = result.get("panel") or {}
+    conf = result.get("confidence") or {}
+
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["section", "key", "value", "detail"])
+
+        writer.writerow(["panel", "type", panel.get("panel_type"),
+                         panel.get("panel_type_name")])
+        writer.writerow(["panel", "type_confidence", panel.get("confidence"),
+                         panel.get("function")])
+        writer.writerow(["panel", "components_detected",
+                         result.get("component_total", 0), ""])
+        writer.writerow(["panel", "components_unknown", conf.get("unknown", 0),
+                         "reported honestly rather than guessed"])
+        writer.writerow(["panel", "mean_confidence", conf.get("mean"), ""])
+
+        # Risk. 'unknown' means the assessment could not be made — the detail column
+        # carries the reason so a reader of the CSV alone is not misled.
+        writer.writerow(["risk", "level", risk.get("level"),
+                         risk.get("headline")])
+        writer.writerow(["risk", "score", risk.get("score"), ""])
+        writer.writerow(["risk", "assessment_confidence", risk.get("confidence"),
+                         ""])
+        writer.writerow(["risk", "assessable", risk.get("assessable"),
+                         "false means no basis to score — NOT a pass"])
+
+        for b in result.get("bill_of_materials") or []:
+            writer.writerow(["bill_of_materials", b.get("class_id"),
+                             b.get("quantity"), b.get("name")])
+        for m in result.get("missing_components") or []:
+            writer.writerow(["possible_missing", m.get("class_id"),
+                             m.get("severity"), m.get("rationale")])
+        for d in risk.get("drivers") or []:
+            writer.writerow(["risk_driver", d.get("code"), d.get("weight"),
+                             d.get("message")])
+        for rec in risk.get("recommendations") or []:
+            writer.writerow(["recommendation", "", "", rec])
+        for note in result.get("maintenance_notes") or []:
+            writer.writerow(["maintenance_note", note.get("code"),
+                             note.get("severity"), note.get("message")])
+        for lim in risk.get("limits") or []:
+            writer.writerow(["limit", "", "", lim])
+        for note in result.get("notes") or []:
+            writer.writerow(["note", "", "", note])
+    return rel
+
+
 def _wrap(text: str, width: int) -> list[str]:
     """Greedy word wrap. ReportLab has no automatic paragraph flow on a canvas,
     so long recommendation text would otherwise run off the right edge."""

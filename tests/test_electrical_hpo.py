@@ -282,29 +282,80 @@ def test_epoch_map_is_none_before_validation_metrics_exist():
 # pruning needs a real mechanism
 # ==========================================================================
 
-def test_training_aborted_propagates_instead_of_becoming_a_failed_result():
+def _train_raising(monkeypatch, exc: BaseException, tmp_path):
+    """Drive tr.train() to the point of raising ``exc`` from inside the try block.
+
+    Avoids needing a real training run (minutes on CPU) while still exercising the
+    real exception handling in ``train()`` rather than a reimplementation of it.
+    """
+    data = tmp_path / "data.yaml"
+    data.write_text("names: [mcb]\nnc: 1\n")
+    monkeypatch.setattr(tr, "ultralytics_available", lambda: (True, "8.4.0"))
+    monkeypatch.setattr(tr, "arch_available", lambda a: True)
+
+    class _Model:
+        def __init__(self, *_a, **_kw):
+            raise exc
+
+    import ultralytics
+
+    monkeypatch.setattr(ultralytics, "YOLO", _Model, raising=False)
+    monkeypatch.setattr(ultralytics, "RTDETR", _Model, raising=False)
+    return tr.TrainConfig(data=str(data), arch="yolo11n", epochs=1)
+
+
+def test_training_aborted_propagates_instead_of_becoming_a_failed_result(
+        monkeypatch, tmp_path):
     """The contract that makes per-epoch pruning possible.
 
-    train() deliberately swallows exceptions so one broken architecture cannot
-    abort a benchmark of six. TrainingAborted is the documented exception: it must
-    escape, or a pruned trial would be reported as a training failure.
+    train() deliberately swallows exceptions so one broken architecture cannot abort
+    a benchmark of six. TrainingAborted is the documented exception: it must escape,
+    or a pruned trial would be reported as a training failure and the sampler would
+    learn the wrong thing about that region of the space.
     """
-    def explode(_trainer):
-        raise tr.TrainingAborted("pruned at epoch 3", 0.21)
+    cfg = _train_raising(
+        monkeypatch, tr.TrainingAborted("pruned at epoch 3", 0.21), tmp_path)
+    with pytest.raises(tr.TrainingAborted) as exc:
+        tr.train(cfg, export_onnx=False)
+    assert exc.value.value == pytest.approx(0.21)
+    assert "epoch 3" in exc.value.reason
 
-    ok, _ = tr.ultralytics_available()
-    if not ok:
-        # Without ultralytics train() returns 'skipped' before reaching callbacks,
-        # so assert the exception's own contract instead.
-        with pytest.raises(tr.TrainingAborted) as exc:
-            explode(None)
-        assert exc.value.value == pytest.approx(0.21)
-        assert "epoch 3" in exc.value.reason
-        return
-    cfg = tr.TrainConfig(data="missing.yaml", arch="yolo11n", epochs=1)
-    with pytest.raises(tr.TrainingAborted):
-        tr.train(cfg, export_onnx=False,
-                 callbacks={"on_fit_epoch_end": explode})
+
+def test_an_ordinary_exception_still_becomes_a_reported_result(monkeypatch,
+                                                              tmp_path):
+    """Everything other than TrainingAborted must stay a result, not an escape."""
+    cfg = _train_raising(monkeypatch, RuntimeError("CUDA out of memory"),
+                         tmp_path)
+    res = tr.train(cfg, export_onnx=False)
+    assert res.status == "failed"
+    assert "CUDA out of memory" in res.reason
+
+
+def test_callbacks_are_registered_on_the_model(monkeypatch, tmp_path):
+    """Pruning depends on the callback actually reaching Ultralytics."""
+    data = tmp_path / "data.yaml"
+    data.write_text("names: [mcb]\nnc: 1\n")
+    monkeypatch.setattr(tr, "ultralytics_available", lambda: (True, "8.4.0"))
+    monkeypatch.setattr(tr, "arch_available", lambda a: True)
+    registered: dict = {}
+
+    class _Model:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def add_callback(self, event, fn):
+            registered[event] = fn
+
+        def train(self, **_kw):
+            raise RuntimeError("stop here — registration is what is under test")
+
+    import ultralytics
+
+    monkeypatch.setattr(ultralytics, "YOLO", _Model, raising=False)
+    cfg = tr.TrainConfig(data=str(data), arch="yolo11n", epochs=1)
+    tr.train(cfg, export_onnx=False,
+             callbacks={"on_fit_epoch_end": lambda t: None})
+    assert "on_fit_epoch_end" in registered
 
 
 def test_training_aborted_carries_the_reason_and_value():

@@ -206,9 +206,39 @@ Read the split report before training:
 ### 4. Confirm the data is worth training on
 
 ```bash
+python -m training.electrical.cli quality --root data/final
 python -m training.electrical.cli analyse --root data/final
 python -m training.electrical.cli gap     --root data/final
 ```
+
+`quality` catches the problems that train **silently**. A YOLO trainer skips an
+unreadable image with a warning nobody reads, clamps an out-of-range box without
+comment, and happily trains on a class index that does not exist in the label space —
+producing a model that is worse than it should be for reasons that never appear in the
+metrics. It exits non-zero when any file is unusable.
+
+| Severity | Meaning | Action |
+|---|---|---|
+| `fatal` | Unreadable image, unparseable label, **class index outside the label space**, unnormalised (absolute-pixel) labels, degenerate box | Must be removed — `--dst` writes a cleaned copy |
+| `warning` | Blurred, too dark/bright, very small, extreme aspect, a box covering the whole frame | Kept by default |
+| `info` | No label file or an empty one (a legitimate negative), a very small box | Informational |
+
+The `class_out_of_range` finding is the one to act on immediately: it almost always
+means a source was merged without remapping, and the trainer will not tell you.
+
+**Low quality is a warning, not a reject, on purpose.** Field panel photography is
+badly lit by nature — torch-lit, backlit through a cabinet window, flash-blown down one
+side. Filtering aggressively on image statistics discards the hardest and most
+valuable training examples and leaves a model that only works in a showroom. Pass
+`--drop-warnings blurred too_dark` to filter anyway, deliberately.
+
+```bash
+python -m training.electrical.cli quality --root data/merged --dst data/clean
+```
+
+Rejects are copied to `data/clean/quarantine/` with a `_reasons.json`; nothing is
+deleted from the source. `quality` also reports class balance and flags an imbalance
+of 20:1 or worse, where the loss is dominated by the majority classes.
 
 `gap` exits non-zero while any priority class has zero annotations, so CI can gate
 a release on "the model has data behind it".
@@ -494,10 +524,55 @@ Every image gets a verdict in `autolabel_manifest.json`:
 Boxes below the review threshold are discarded: a label file full of junk is slower
 to fix than an empty one.
 
-**These are pre-labels, not ground truth.** Import into Roboflow / CVAT / Label
-Studio as YOLO, work the `review_queue` first (worst predictions are both most
-likely wrong and most informative), correct, export. Training directly on
-un-reviewed output teaches the model its own mistakes.
+**These are pre-labels, not ground truth.** Training directly on un-reviewed output
+teaches the model its own mistakes. Two ways to correct them:
+
+**In the platform** — `/api/annotations`, for triage and reclassification:
+
+```bash
+curl -X POST localhost:8000/api/annotations -H 'Content-Type: application/json' \
+     -d '{"name":"round1","root":"data/prelabelled","split":"train"}'
+curl 'localhost:8000/api/annotations/round1/queue'          # worst-first
+curl 'localhost:8000/api/annotations/round1/items/p12.jpg'  # boxes + rules on screen
+curl -X POST localhost:8000/api/annotations/round1/items/p12.jpg \
+     -H 'Content-Type: application/json' \
+     -d '{"boxes":[{"index":0,"verdict":"accepted"},
+                   {"index":2,"verdict":"reclassified","class_id":"vfd"}],
+          "state":"reviewed"}'
+curl -X POST localhost:8000/api/annotations/round1/export \
+     -H 'Content-Type: application/json' -d '{"dst_root":"data/corrected"}'
+```
+
+Verdicts live in the database, so a review survives a restart and two people can work
+one batch. The YOLO files on disk are only rewritten by `export`, so an in-progress
+review cannot corrupt the dataset it is reviewing. A reclassification to a class id
+outside the taxonomy is rejected with 400 — a typo would otherwise become a label the
+trainer silently ignores. The export excludes un-reviewed images by default.
+
+**In a labelling tool** — Roboflow / CVAT / Label Studio all import the YOLO tree, and
+all draw new boxes far better than a bespoke canvas would. Mark an image
+`needs_redraw` when its boxes are wrong in ways triage cannot fix; the export excludes
+and lists those so they go to a real tool rather than being fudged into the training
+set.
+
+### Unclassified boxes live in a sidecar, and this matters
+
+`unknown_industrial_component` is deliberately **not** in `CLASS_ORDER` — it is the
+post-processor's honest fallback at inference time, not something a detector should be
+trained to predict. It therefore has no class index, and there is no valid way to write
+it into a YOLO label file.
+
+Boxes the model finds but cannot classify go to
+`labels/<split>/<stem>.unclassified.json` instead. The YOLO tree stays valid and
+trainable; the boxes survive for a human to name; and once named they enter the export
+with a real class. `unclassified_promoted` and `unclassified_still_unresolved` in the
+export report say how many made it.
+
+These are the highest-value boxes in a batch — they mark exactly where the model is
+blind — so work them first. (An earlier version of `autolabel` looked up the unknown
+class index, got `None`, and silently discarded every one of them while claiming in its
+manifest that they had been written. Measured on a real run, that was 107 boxes lost
+from 3 images.)
 
 ### The labelling rules that decide whether the dataset is any good
 
