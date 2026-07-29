@@ -215,7 +215,8 @@ def test_sweep_covers_the_grid_and_picks_a_winner():
     gts = [_gt("a"), _gt("b")]
     cache = _cache([("a", [_cand("mcb", 0.9)]), ("b", [_cand("mcb", 0.9)])])
     res = pe.sweep(gts, cache, decode_floors=(0.01, 0.05, 0.10),
-                   unknown_floors=(0.10, 0.20), check_plausibility=False)
+                   unknown_floors=(0.10, 0.20), strictness_values=(1.0,),
+                   check_plausibility=False)
     assert res["status"] == "swept"
     assert res["points_evaluated"] == 6
     assert len(res["grid"]) == 6
@@ -250,6 +251,61 @@ def test_sweep_rejects_an_unknown_objective():
 def test_default_grid_matches_the_documented_sweep():
     assert pe.DECODE_FLOORS == (0.01, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20)
     assert pe.UNKNOWN_FLOORS == (0.10, 0.15, 0.18, 0.20, 0.25)
+    assert pe.STRICTNESS_VALUES[pe.STRICTNESS_VALUES.index(1.00)] == 1.00
+
+
+def test_the_two_floors_alone_cannot_move_precision_or_recall():
+    """The property that puts strictness in the grid. confidence_gate asserts a
+    class when score >= threshold_for(class), and the taxonomy thresholds are
+    ~0.4. Every floor in the default grid is <= 0.25, so no combination of them
+    changes which boxes clear their threshold — only how many of the rest are
+    demoted to unknown or dropped."""
+    gts = [_gt("a")]
+    cache = _cache([("a", [_cand("mcb", 0.9),                     # asserted
+                           _cand("mcb", 0.30, (300, 100, 340, 200)),   # demotable
+                           _cand("mcb", 0.12, (500, 100, 540, 200))])])
+    res = pe.sweep(gts, cache, strictness_values=(1.0,),
+                   check_plausibility=False)
+    triples = {(r["precision"], r["recall"], r["map_50"]) for r in res["grid"]}
+    assert len(triples) == 1
+    # but the abstention rate genuinely varies, which is what the floors control
+    assert len({r["unknown_rate"] for r in res["grid"]}) > 1
+
+
+def test_strictness_does_move_precision_and_recall():
+    gts = [_gt("a")]
+    # A score between the default threshold (0.4) and a slackened one.
+    cache = _cache([("a", [_cand("mcb", 0.30)])])
+    res = pe.sweep(gts, cache, decode_floors=(0.05,), unknown_floors=(0.18,),
+                   strictness_values=(0.5, 1.0), check_plausibility=False)
+    by_strict = {r["strictness"]: r for r in res["grid"]}
+    # strictness 0.5 -> threshold 0.20, so the box is asserted and matches
+    assert by_strict[0.5]["recall"] == 1.0
+    # strictness 1.0 -> threshold 0.40, so it is demoted to unknown instead
+    assert by_strict[1.0]["recall"] == 0.0
+    assert by_strict[1.0]["unknown_rate"] == 1.0
+
+
+def test_abstentions_are_penalised_enough_to_break_a_tie():
+    """Two configurations with identical asserted detections must not tie, or the
+    tie breaks toward whichever one shows the operator the most unknown boxes."""
+    quiet = {"precision": 0.8, "recall": 0.8, "f1": 0.8, "map_50": 0.8,
+             "fp_per_image": 0.5, "unknown_rate": 0.1}
+    noisy = {**quiet, "unknown_rate": 0.9}
+    assert (pe.score_point(quiet, "production_score")
+            > pe.score_point(noisy, "production_score"))
+
+
+def test_tie_break_prefers_the_quieter_configuration():
+    gts = [_gt("a")]
+    cache = _cache([("a", [_cand("mcb", 0.9)])])
+    res = pe.sweep(gts, cache, decode_floors=(0.01, 0.20),
+                   unknown_floors=(0.10, 0.25), strictness_values=(1.0,),
+                   check_plausibility=False)
+    # Nothing here is demotable, so every point scores identically; the winner
+    # must be the highest floors rather than an arbitrary one.
+    assert res["best"]["decode_floor"] == 0.20
+    assert res["best"]["unknown_floor"] == 0.25
 
 
 # --------------------------------------------------------------------------

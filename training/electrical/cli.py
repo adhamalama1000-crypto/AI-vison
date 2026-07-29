@@ -663,16 +663,18 @@ def cmd_prodeval(args) -> int:
 
 
 def cmd_sweep(args) -> int:
-    """Sweep decode_floor x unknown_floor and choose a production operating point."""
+    """Sweep the gate grid and choose a production operating point."""
     decode = sorted(args.decode_floors or list(pe.DECODE_FLOORS))
     unknown = sorted(args.unknown_floors or list(pe.UNKNOWN_FLOORS))
+    strict = sorted(args.strictness_values or list(pe.STRICTNESS_VALUES))
     gts, cache = _prodeval_cache(args, min(decode))
     if cache is None:
         return 1
     _stderr(f"cached {cache.raw_count} raw candidates over {cache.image_count} "
             f"images at decode_floor={cache.base_decode_floor}; replaying "
-            f"{len(decode) * len(unknown)} operating points")
-    res = pe.sweep(gts, cache, decode, unknown, objective=args.objective,
+            f"{len(decode) * len(unknown) * len(strict)} operating points")
+    res = pe.sweep(gts, cache, decode, unknown, strict,
+                   objective=args.objective,
                    max_fp_per_image=args.max_fp_per_image,
                    min_precision=args.min_precision,
                    min_recall=args.min_recall, iou_thr=args.iou, log=_stderr)
@@ -1189,6 +1191,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"default {list(pe.DECODE_FLOORS)}")
     sp.add_argument("--unknown-floors", type=float, nargs="+",
                     help=f"default {list(pe.UNKNOWN_FLOORS)}")
+    sp.add_argument("--strictness-values", type=float, nargs="+",
+                    help="global multipliers on every per-class acceptance "
+                         "threshold — the dimension that actually trades "
+                         "precision against recall, because no decode/unknown "
+                         "floor can change which boxes clear their class "
+                         f"threshold. Default {list(pe.STRICTNESS_VALUES)}")
     sp.add_argument("--objective", default="production_score",
                     choices=list(pe.OBJECTIVES),
                     help="what to maximise; production_score blends F1 and "
