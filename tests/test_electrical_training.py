@@ -217,11 +217,53 @@ def test_source_registry_is_well_formed():
     assert ds.SOURCES
     for s in ds.SOURCES:
         assert s.key and s.name and s.licence and s.notes
-        assert s.kind in ("roboflow", "kaggle", "url", "manual")
+        assert s.kind in ("roboflow", "kaggle", "url", "github", "openimages",
+                          "manual")
         for cid in s.provides:
             assert cid in tax.SPECS, f"{s.key} claims unknown class {cid}"
         for src_label, cid in s.label_map.items():
             assert cid in tax.SPECS, f"{s.key} maps {src_label} to unknown {cid}"
+
+
+def test_every_registry_kind_has_a_fetcher():
+    """A registry entry whose kind nothing can fetch is a dead end."""
+    from training.electrical import download as dl
+
+    fetchable = {"roboflow": dl.fetch_roboflow, "kaggle": dl.fetch_kaggle,
+                 "url": dl.fetch_url, "github": dl.fetch_github,
+                 "openimages": dl.fetch_openimages}
+    for s in ds.SOURCES:
+        if s.kind == "manual":
+            continue
+        assert s.kind in fetchable, f"{s.key}: no fetcher for kind '{s.kind}'"
+
+
+def test_a_placeholder_locator_source_promises_no_classes():
+    """A template entry must not inflate the coverage forecast.
+
+    `github_dataset_template` and `kaggle_electrical_components` exist so the
+    fetchers are reachable, not because a verified dataset sits behind them. If
+    either claimed classes in `provides`, plan() would report coverage that does
+    not exist.
+    """
+    for s in ds.SOURCES:
+        if s.kind != "manual" and "<" in s.locator:
+            assert s.provides == (), \
+                (f"{s.key} has a placeholder locator but claims to provide "
+                 f"{s.provides}")
+
+
+def test_open_images_contributes_negatives_not_positives():
+    """Open Images has no industrial electrical classes — it must claim none."""
+    oi = ds.SOURCE_INDEX["openimages_hard_negatives"]
+    assert oi.kind == "openimages"
+    assert oi.provides == ()
+    assert oi.class_counts == {}
+    assert "NEGATIVE" in oi.notes.upper()
+    # And it must not appear in any coverage forecast.
+    p = ds.plan()
+    assert "openimages_hard_negatives" not in {
+        row["key"] for row in p["sources"] if row["provides"]}
 
 
 def test_plan_separates_downloadable_from_manual_coverage():

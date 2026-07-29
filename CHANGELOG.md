@@ -1,5 +1,145 @@
 # Changelog
 
+## [5.3.0] — Closing the production gaps
+
+A full audit against the twelve-task production brief
+([`docs/AUDIT_v5.2.0.md`](docs/AUDIT_v5.2.0.md)) found **no TODOs, no stubs and no
+mocked AI paths** in production code — the `NotImplementedError`s are legitimate ABC
+contracts. What it found instead were eight capabilities the brief requires that had
+never been built. All eight are now built. No existing feature was removed,
+simplified or rewritten.
+
+### Dataset builder (Task 2)
+
+- **`training/electrical/dedup.py`** — near-duplicate detection and removal. The
+  registry already warned that two public switchgear sources are probably the same
+  photographs republished; nothing detected it. dHash + aHash within a Hamming
+  distance of 5, plus an exact-content pass, one connected-components sweep over both
+  relations, and **cross-split leak detection reported separately** because that is
+  the case that corrupts metrics. `cli dedup` is read-only by default and **exits
+  non-zero on cross-split leakage** so CI can gate on it; `cli merge --dedup` wires it
+  into the merge. Removal keeps the *training* copy and drops the val/test one — the
+  only direction that leaves evaluation data unseen. Duplicates whose **labels
+  disagree** are kept in full and reported rather than resolved by picking one.
+  Measured on panel imagery: brightness, JPEG q30, blur and a half-resolution round
+  trip give a distance of 0–1; two different panels give 16–22.
+- **Open Images and GitHub fetchers.** `kind="openimages"` (FiftyOne partial download
+  — the only practical way to pull a class subset of a 500 GB release) and
+  `kind="github"` (pinned archives and release assets; an unpinned default-branch
+  download is refused as irreproducible). The Open Images entry declares **zero
+  positive classes on purpose**: OIv7 has no industrial electrical classes, its
+  nearest neighbours are domestic light switches and sockets, and its value here is as
+  **hard negatives** so the detector does not fire `push_button` on every round button
+  in frame. The GitHub entry is a working fetcher with **no verified source behind
+  it** — GitHub was searched and returned nothing usable, and naming a dataset would
+  be a fake citation.
+
+### Auto-annotation (Task 4)
+
+- **`training/electrical/refine.py`** — SAM2 box refinement. Open-vocabulary
+  detectors return loose boxes that include DIN rail, neighbouring modules and wire
+  looms, and correcting a loose box costs a labeller as much as drawing a new one —
+  which destroys the speed-up that justifies auto-annotation. SAM2 is used as a
+  promptable segmenter: each detector box becomes a box prompt and the mask's tight
+  bounds replace it. Prefers SAM2 via Ultralytics, falls back to SAM 1 / MobileSAM,
+  then native `sam2`.
+- **Four guards, because a "tighter" box can be worse than a loose one.** Rejects a
+  refinement that grows past 1.6× area (SAM segmenting the whole DIN-rail row — the
+  modules are visually continuous), collapses below 0.35× (only the toggle lever),
+  drifts more than 0.35 of the diagonal (the neighbouring device), or lands on an
+  aspect ratio the class's taxonomy prior rules out. A failed guard keeps the original
+  box. The manifest reports accept rate and mean IoU shift, so "is SAM helping on my
+  imagery?" has a number.
+
+### Model selection (Task 5)
+
+- **`training/electrical/bench.py`** — runtime measurement and automatic selection.
+  Ranking on mAP alone always picks the largest model, which for a CPU ONNX
+  deployment is usually wrong. Now measures p50/p95/p99 latency, FPS, peak RSS delta
+  and parameter count, and `select_best()` scores accuracy against speed with a **hard
+  latency budget that disqualifies rather than penalises** — then prints what it traded
+  away, so a human can overrule it. Timing discards warmup, requires real images
+  (detector latency is data-dependent through NMS), and records the environment and
+  thread count. `cli profile` measures one model; `cli bench` trains and picks.
+
+### Hyperparameter optimisation (Task 6)
+
+- **`training/electrical/hpo.py`** — Optuna search over learning rate, batch size,
+  image size, optimizer, LR schedule, warmup, weight decay, patience and the full
+  augmentation block. Runs the hand-tuned defaults first as a reference, and says so
+  when the search fails to beat them by more than noise.
+- **`fliplr`/`flipud` are held at 0 and never sampled by default.** A search
+  maximising val mAP on a small set will switch horizontal flip on because it looks
+  like free augmentation, and produce a model that has learned mirrored nameplates are
+  normal. `--no-respect-domain-priors` searches them anyway; the flag exists so the
+  decision is deliberate.
+- **Pruning is real, not claimed.** A new `on_fit_epoch_end` callback path in
+  `train()` reports intermediate mAP to the median pruner. `TrainingAborted` is the
+  documented exception that propagates out of `train()` so a pruned trial is not
+  reported as a training failure.
+- Refuses to waste GPU hours: pointed at a dataset where `cli gap` reports classes
+  with zero annotations, it says so up front.
+
+### Export artifacts (Task 7)
+
+- Bundles now carry **`metrics.json`** (headline + per-class accuracy, confusion
+  matrix, training curves, runtime, and the caveats that make the headline readable)
+  and an **`artifacts/`** directory: confusion matrix, PR/F1/P/R curves, loss curves,
+  `results.csv`, `args.yaml`. Harvested from the Ultralytics run, and **rendered from
+  `results.csv` when Ultralytics did not plot them** (RT-DETR runs, `plots=False`).
+  The confusion matrix is rendered from our own evaluation, so its axes are readable
+  device names rather than integer indices, and only active classes are plotted.
+  `install_bundle` carries the evidence with the weights — a deployed model that
+  cannot be audited is the problem this solves.
+
+### Panel intelligence (Task 9)
+
+- **`rtsp_backend/electrical/risk.py`** — aggregate risk level, in the report, the
+  API and the PDF. Per-finding severities existed; nothing combined them, so one
+  important finding and twelve looked alike at a glance.
+- **It returns `unknown`, never `low`, when there is no basis to score** — no model
+  loaded, nothing detected, or more than half the detections unidentified. "We found
+  nothing wrong" and "we could not look" read identically while meaning opposite
+  things, and somebody may decide not to open a cabinet based on this output.
+- The score is the sum of its listed `drivers` — no hidden terms, no learned weights.
+  Detection quality is itself a driver. Too few devices means an absence is not
+  treated as evidence. A low score with low confidence explicitly does **not** claim a
+  clean panel. It adds no findings of its own; it only weighs what the rule engine
+  found.
+
+### Performance (Task 11)
+
+- **Batch inference.** `recognize_batch()` / `infer_batch()` on the industrial
+  recognisers, a genuinely batched forward pass for `industrial_ultralytics`, an honest
+  sequential fallback elsewhere, and `supports_true_batching` in `status()` so a
+  throughput claim is checkable. A backend returning the wrong number of results is
+  **refused** rather than paired up positionally, because that misattributes one
+  panel's detections to another image. `POST /api/panel/analyze/batch` (50-image cap,
+  per-file rejection) and `cli analyse-batch`. Deliberately **not** applied to the RTSP
+  path: a cabinet does not change between frames, so buffering to fill a batch adds
+  latency for nothing.
+
+### Fixed
+
+Three bugs, all caught by the tests written alongside the code:
+
+- **Deduplication missed every cross-split leak.** Exact-duplicate groups were emitted
+  immediately and their members excluded from the near-duplicate pass, so with A and B
+  byte-identical in train and C a re-compressed copy of A in val, C could not link to A
+  and the leak reported as zero. Both relations now feed one connected-components pass.
+- **`_pct` was off by one rank.** `round(x + 0.5)` overstated every percentile whenever
+  `p/100 × N` landed on an integer — the p50 of 1..10 came back as 6.0. Now
+  `ceil(p/100 × N)`.
+- **`train.py` and `export.py` each wrote `classes.json` differently**, so the
+  taxonomy version in one was already stale. `train.py` now delegates, and a test
+  asserts the two agree.
+
+### Tests
+
+498 → 688 passing. New suites for deduplication (27), refinement guards (27),
+benchmarking and selection (33), HPO search space (35), risk assessment (30) and
+batch inference (23), plus export-artifact coverage in the pipeline suite.
+
 ## [5.2.0] — Electrical component detection: real datasets, real pipeline
 
 The component-recognition engine shipped in 5.1.0 with everything except a

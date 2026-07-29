@@ -53,7 +53,7 @@ class DatasetSource:
 
     key: str
     name: str
-    #: "roboflow" | "kaggle" | "url" | "manual"
+    #: "roboflow" | "kaggle" | "url" | "github" | "openimages" | "manual"
     kind: str
     #: Where to get it. Roboflow entries are ``workspace/project/version``.
     locator: str
@@ -99,6 +99,14 @@ class DatasetSource:
         if self.kind == "url":
             return (f"python -m training.electrical.cli download "
                     f"--sources {self.key}   # curl -L {self.locator}")
+        if self.kind == "github":
+            return (f"python -m training.electrical.cli download "
+                    f"--sources {self.key}   "
+                    f"# github archive/release asset: {self.locator}")
+        if self.kind == "openimages":
+            return (f"python -m training.electrical.cli download "
+                    f"--sources {self.key}   "
+                    f"# needs fiftyone; Open Images classes: {self.locator}")
         return "manual acquisition — see notes"
 
 
@@ -533,6 +541,54 @@ SOURCES: tuple[DatasetSource, ...] = (
     # ---------------------------------------------------------------------
     # Non-Roboflow options and the proprietary programme.
     # ---------------------------------------------------------------------
+    DatasetSource(
+        key="openimages_hard_negatives",
+        name="Open Images V7 — domestic switches/sockets (HARD NEGATIVES ONLY)",
+        kind="openimages", locator="Light switch,Power plugs and sockets",
+        licence="CC BY 4.0 (annotations) / CC BY 2.0 (images) — attribute Google "
+                "and the Flickr photographers",
+        provides=(),
+        images=None,
+        verified=True,
+        notes="Verified: Open Images V7 boxable classes 309 'Light switch' and 405 "
+              "'Power plugs and sockets' exist (confirmed against the Ultralytics "
+              "open-images-v7.yaml class list). Open Images has NO industrial "
+              "electrical classes — no MCB, no contactor, no PLC, nothing on a DIN "
+              "rail. `provides` is therefore deliberately EMPTY: this source "
+              "contributes zero positive instances and plan() must not credit it "
+              "with any.\n\n"
+              "Its value is as HARD NEGATIVES. A detector trained only on panel "
+              "interiors will happily fire 'push_button' on a domestic light "
+              "switch and 'indicator_lamp' on a wall socket, and negatives are the "
+              "only thing that teaches it not to. Import these images with EMPTY "
+              "label files (the downloader's normaliser already writes an empty "
+              "label for an unlabelled image, treating it as a negative), and cap "
+              "them at roughly 10%% of the training set — beyond that they "
+              "suppress genuine detections.\n\n"
+              "Needs `pip install fiftyone`; there is no fallback, because "
+              "fetching Open Images without partial download means pulling ~500 GB "
+              "to keep a few hundred images.",
+    ),
+    DatasetSource(
+        key="github_dataset_template",
+        name="GitHub — dataset repository or release asset",
+        kind="github", locator="<owner>/<repo>::<asset.zip>@<tag>",
+        licence="per-repository — read the LICENSE file before training on it",
+        provides=(),
+        notes="A working fetcher with no verified source behind it, and that is a "
+              "finding rather than an omission. GitHub was searched for electrical "
+              "panel / switchgear / circuit-breaker detection datasets and "
+              "returned nothing usable: the matches are a Java circuit-breaker "
+              "resilience library, a Brawl Stars mod, a switchgear-symbol printing "
+              "repo and a Schneider selection tool. None contain annotated panel "
+              "imagery. Naming one here would be a fake citation.\n\n"
+              "The fetcher is real and ready for when you find one:\n"
+              "  --locator owner/repo@v1.0                  (pinned archive)\n"
+              "  --locator owner/repo::images.zip@v1.0      (release asset)\n"
+              "Always pin a tag or commit. An unpinned default-branch download is "
+              "not reproducible — the same command next month gives different "
+              "bytes, and your dataset provenance is gone.",
+    ),
     DatasetSource(
         key="kaggle_electrical_components",
         name="Kaggle — electrical / electronic component image sets",

@@ -546,6 +546,186 @@ def test_install_copies_a_verified_bundle(tmp_path):
     assert res["next_step"]
 
 
+def _ultralytics_run(root: str, epochs: int = 12) -> str:
+    """A directory shaped like an Ultralytics training run."""
+    os.makedirs(os.path.join(root, "weights"), exist_ok=True)
+    header = ["epoch", "train/box_loss", "train/cls_loss", "train/dfl_loss",
+              "metrics/precision(B)", "metrics/recall(B)", "metrics/mAP50(B)",
+              "metrics/mAP50-95(B)", "val/box_loss", "val/cls_loss",
+              "val/dfl_loss", "lr/pg0"]
+    lines = [",".join(header)]
+    for e in range(1, epochs + 1):
+        decay = 1.0 / (1 + 0.15 * e)
+        lines.append(",".join(str(v) for v in [
+            e, 2.4 * decay, 3.1 * decay, 1.5 * decay,
+            0.25 + 0.6 * (1 - decay), 0.18 + 0.6 * (1 - decay),
+            0.20 + 0.65 * (1 - decay), 0.10 + 0.45 * (1 - decay),
+            2.6 * decay, 3.4 * decay, 1.6 * decay, 0.01 * decay]))
+    with open(os.path.join(root, "results.csv"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    with open(os.path.join(root, "args.yaml"), "w", encoding="utf-8") as fh:
+        fh.write(f"epochs: {epochs}\nimgsz: 960\n")
+    weights = os.path.join(root, "weights", "best.pt")
+    with open(weights, "w", encoding="utf-8") as fh:
+        fh.write("not a real checkpoint")
+    return weights
+
+
+def _evaluation(classes=("mcb", "contactor", "relay")) -> dict:
+    cm = {t: {p: (24 if t == p else 2) for p in classes} for t in classes}
+    return {
+        "status": "evaluated", "map_50": 0.80, "map_50_95": 0.57,
+        "overall": {"precision": 0.83, "recall": 0.79, "f1": 0.81},
+        "classes": [{"class_id": c, "precision": 0.8, "recall": 0.78,
+                     "f1": 0.79, "support": 30} for c in classes],
+        "confusion_matrix": cm,
+    }
+
+
+def test_results_csv_is_parsed_into_curves(tmp_path):
+    run = str(tmp_path / "run")
+    _ultralytics_run(run, epochs=9)
+    curves = ex.parse_results_csv(os.path.join(run, "results.csv"))
+    assert curves["epochs"] == 9
+    assert len(curves["map_50_95"]) == 9
+    # Loss must fall and mAP must rise over the run, or the fixture is wrong.
+    assert curves["train_box_loss"][0] > curves["train_box_loss"][-1]
+    assert curves["map_50_95"][0] < curves["map_50_95"][-1]
+    assert curves["learning_rate"]
+
+
+def test_parse_results_csv_of_a_missing_file_is_empty(tmp_path):
+    assert ex.parse_results_csv(str(tmp_path / "nope.csv")) == {}
+
+
+def test_artifacts_are_collected_from_the_run_directory(tmp_path):
+    run = str(tmp_path / "run")
+    _ultralytics_run(run)
+    out = str(tmp_path / "bundle")
+    info = ex.collect_artifacts(run, out)
+    assert info["status"] == "collected"
+    assert "results.csv" in info["copied"]
+    assert "args.yaml" in info["copied"]
+    assert os.path.exists(os.path.join(out, "artifacts", "results.csv"))
+    # Files Ultralytics did not write are reported missing, not invented.
+    assert "confusion_matrix.png" in info["missing"]
+
+
+def test_collect_artifacts_explains_a_missing_run_directory(tmp_path):
+    info = ex.collect_artifacts(str(tmp_path / "nope"), str(tmp_path / "b"))
+    assert info["status"] == "skipped"
+    assert "--run-dir" in info["reason"]
+
+
+def test_metrics_json_records_accuracy_and_caveats(tmp_path):
+    out = str(tmp_path / "bundle")
+    path = ex.write_metrics_json(out, evaluation=_evaluation(),
+                                 curves={"epochs": 5, "map_50_95": [0.1] * 5})
+    data = json.load(open(path, encoding="utf-8"))
+    assert data["headline"]["map_50_95"] == 0.57
+    assert data["headline"]["f1"] == 0.81
+    assert data["per_class"] and data["confusion_matrix"]
+    assert data["training_curves"]["epochs"] == 5
+    # The caveats are the point: a headline mAP without them is misleading.
+    assert any("absent from the validation split" in c for c in data["caveats"])
+    assert any("300-instance" in c for c in data["caveats"])
+
+
+def test_metrics_json_uses_none_for_unmeasured_not_zero(tmp_path):
+    """A metric that was never measured must not read as a bad measurement."""
+    path = ex.write_metrics_json(str(tmp_path / "b"))
+    data = json.load(open(path, encoding="utf-8"))
+    assert data["headline"]["map_50_95"] is None
+    assert data["headline"]["f1"] is None
+    assert data["per_class"] is None
+    assert data["training_curves"] is None
+    assert data["runtime"] is None
+
+
+def test_curves_are_plotted_when_matplotlib_is_available(tmp_path):
+    run = str(tmp_path / "run")
+    _ultralytics_run(run)
+    out = str(tmp_path / "bundle")
+    curves = ex.parse_results_csv(os.path.join(run, "results.csv"))
+    res = ex.plot_curves(out, curves)
+    if res["status"] == "skipped":
+        assert "matplotlib" in res["reason"]
+        assert "metrics.json" in res["reason"], \
+            "a skipped plot must say the numbers are still available"
+        return
+    assert res["status"] == "plotted"
+    assert "loss_curves.png" in res["files"]
+    assert "metric_curves.png" in res["files"]
+    for name in res["files"]:
+        path = os.path.join(out, "artifacts", name)
+        assert os.path.getsize(path) > 1000, f"{name} is suspiciously small"
+
+
+def test_confusion_matrix_is_plotted_over_active_classes_only(tmp_path):
+    """A 54x54 grid of mostly zeros is unreadable and says nothing."""
+    out = str(tmp_path / "bundle")
+    res = ex.plot_confusion_matrix(out, _evaluation()["confusion_matrix"])
+    if res["status"] == "skipped":
+        assert "matplotlib" in res["reason"]
+        return
+    assert res["status"] == "plotted"
+    assert res["classes_plotted"] == 3, \
+        "only classes that appear should be plotted"
+    assert os.path.getsize(os.path.join(
+        out, "artifacts", "confusion_matrix_normalized.png")) > 1000
+
+
+def test_confusion_matrix_plot_skips_an_empty_matrix(tmp_path):
+    res = ex.plot_confusion_matrix(str(tmp_path / "b"), {})
+    assert res["status"] == "skipped"
+    res2 = ex.plot_confusion_matrix(str(tmp_path / "b"), None)
+    assert res2["status"] == "skipped"
+
+
+def test_export_bundle_collects_evidence_end_to_end(tmp_path):
+    run = str(tmp_path / "run")
+    weights = _ultralytics_run(run)
+    out = str(tmp_path / "bundle")
+    res = ex.export_bundle(weights, out, evaluation=_evaluation(),
+                           log=lambda m: None)
+
+    assert res["status"] == "exported"
+    # The run directory must be inferred from .../weights/best.pt.
+    assert res["artifacts"]["run_dir"] == run
+    assert "results.csv" in res["artifacts"]["copied"]
+    assert os.path.exists(os.path.join(out, "metrics.json"))
+    metrics = json.load(open(os.path.join(out, "metrics.json"),
+                             encoding="utf-8"))
+    assert metrics["headline"]["map_50_95"] == 0.57
+    assert metrics["training_curves"]["epochs"] == 12
+    assert metrics["provenance"]["run_dir"] == run
+
+
+def test_export_warns_when_no_accuracy_evidence_is_supplied(tmp_path):
+    """A deployed model with no accuracy record cannot be audited later."""
+    run = str(tmp_path / "run")
+    weights = _ultralytics_run(run)
+    res = ex.export_bundle(weights, str(tmp_path / "bundle"),
+                           log=lambda m: None)
+    assert any("no measured accuracy" in w for w in res["warnings"])
+    assert any("cli eval" in w for w in res["warnings"])
+
+
+def test_install_carries_the_artifacts_with_the_weights(tmp_path):
+    run = str(tmp_path / "run")
+    weights = _ultralytics_run(run)
+    bundle = str(tmp_path / "bundle")
+    ex.export_bundle(weights, bundle, evaluation=_evaluation(),
+                     log=lambda m: None)
+    install = str(tmp_path / "models" / "components")
+    res = ex.install_bundle(bundle, install)
+
+    assert res["status"] == "installed"
+    assert os.path.exists(os.path.join(install, "metrics.json"))
+    assert os.path.isdir(os.path.join(install, "artifacts"))
+    assert os.path.exists(os.path.join(install, "artifacts", "results.csv"))
+
+
 def test_tensorrt_instructions_explain_why_they_are_not_automated():
     info = ex.tensorrt_instructions()
     assert "not portable" in info["why_not_automated"]

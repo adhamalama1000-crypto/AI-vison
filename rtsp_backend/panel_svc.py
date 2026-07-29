@@ -19,11 +19,14 @@ and expert analysis replace it.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import logging
+from typing import Any, Optional, Sequence
 
 import numpy as np
 
 from .electrical import inspector, postprocess as pp
+
+_log = logging.getLogger(__name__)
 
 #: Kept for consumers that still read the legacy wire keys.
 _EMPTY_WIRE_KEYS: dict[str, Any] = {
@@ -76,6 +79,81 @@ def analyze(ai_manager, image_bgr: np.ndarray, annotate: bool = True,
     return result
 
 
+def analyze_batch(ai_manager, images: Sequence[np.ndarray],
+                  batch_size: int = 8, annotate: bool = False,
+                  gate_config: Optional[pp.GateConfig] = None) -> list[dict]:
+    """Inspect several panel images, batching the detector forward pass.
+
+    Returns one result per input image, in order, each with the same shape as
+    :func:`analyze`. ``annotate`` defaults to ``False`` here because rendering an
+    overlay per image is the dominant cost for a large batch and the caller usually
+    wants the data.
+
+    Falls back to sequential :func:`analyze` when the selected backend has no
+    batched path, so the result is always correct and only the throughput varies.
+    """
+    backend = ai_manager.backend("components") if ai_manager is not None else None
+    if backend is not None and not getattr(backend, "ready", False):
+        try:
+            backend.load()
+        except Exception:
+            pass
+
+    images = list(images)
+    if not images:
+        return []
+
+    # Without a batched recogniser there is nothing to gain, and correctness must
+    # not depend on the optimisation existing.
+    if backend is None or not getattr(backend, "ready", False) \
+            or not hasattr(backend, "recognize_batch"):
+        return [analyze(ai_manager, img, annotate=annotate,
+                        gate_config=gate_config) for img in images]
+
+    try:
+        gates = backend.recognize_batch(images, batch_size=batch_size)
+    except Exception:
+        _log.exception("batched recognition failed; falling back to per-image")
+        return [analyze(ai_manager, img, annotate=annotate,
+                        gate_config=gate_config) for img in images]
+
+    out: list[dict] = []
+    for img, gate in zip(images, gates):
+        result = inspector.inspect_panel(
+            _PrecomputedRecognizer(gate), img, annotate=annotate,
+            gate_config=gate_config)
+        result["component_model_loaded"] = True
+        result.update(_EMPTY_WIRE_KEYS)
+        result["topology"] = {"nodes": [
+            {"id": c["index"], "label": c["label"], "bbox": c["bbox"],
+             "position": c["position"], "class_id": c["class_id"]}
+            for c in result.get("components", [])
+        ], "edges": [], "node_count": result.get("component_total", 0),
+            "edge_count": 0}
+        result["report"] = inspector.build_report(result)
+        out.append(result)
+    return out
+
+
+class _PrecomputedRecognizer:
+    """Adapter presenting an already-computed GateResult as a recogniser.
+
+    The batched forward pass happens once for the whole chunk, but
+    :func:`~rtsp_backend.electrical.inspector.inspect_panel` does everything else —
+    OCR, expert annotation, panel classification, risk — per image. Rather than
+    duplicating that pipeline for the batch path (two copies that would drift), the
+    precomputed result is handed back through the recogniser interface it expects.
+    """
+
+    ready = True
+
+    def __init__(self, gate: "pp.GateResult") -> None:
+        self._gate = gate
+
+    def recognize(self, frame) -> "pp.GateResult":
+        return self._gate
+
+
 def analyze_and_report(ai_manager, image_bgr: np.ndarray,
                        annotate: bool = True) -> tuple[dict, str]:
     """Convenience: inspection result plus the rendered plain-text report."""
@@ -83,4 +161,4 @@ def analyze_and_report(ai_manager, image_bgr: np.ndarray,
     return result, inspector.report_text(result["report"])
 
 
-__all__ = ["analyze", "analyze_and_report", "NO_MODEL_NOTE"]
+__all__ = ["analyze", "analyze_batch", "analyze_and_report", "NO_MODEL_NOTE"]

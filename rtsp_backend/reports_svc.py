@@ -38,6 +38,23 @@ def _try_reportlab():
         return False
 
 
+def _wrap(text: str, width: int) -> list[str]:
+    """Greedy word wrap. ReportLab has no automatic paragraph flow on a canvas,
+    so long recommendation text would otherwise run off the right edge."""
+    words = str(text).split()
+    if not words:
+        return []
+    lines, current = [], words[0]
+    for word in words[1:]:
+        if len(current) + 1 + len(word) <= width:
+            current = f"{current} {word}"
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
 def panel_pdf(data_dir: str, result: dict, annotated_rel: Optional[str],
               title: str = "Panel Analysis Report") -> Optional[str]:
     if not _try_reportlab():
@@ -74,6 +91,63 @@ def panel_pdf(data_dir: str, result: dict, annotated_rel: Optional[str],
                 y -= ih * scale + 8 * mm
             except Exception:
                 pass
+
+    # -- risk assessment, first: it is what a reader looks for --------------
+    risk = (result.get("report") or {}).get("risk_assessment") or {}
+    if risk:
+        level = str(risk.get("level") or "unknown").upper()
+        # Colour the level so a scanned page reads at a glance. 'unknown' is grey
+        # rather than green — it must not look like a pass.
+        colour = {
+            "LOW": (0.15, 0.55, 0.25), "MODERATE": (0.85, 0.65, 0.10),
+            "ELEVATED": (0.90, 0.45, 0.05), "HIGH": (0.80, 0.15, 0.15),
+        }.get(level, (0.45, 0.45, 0.45))
+        c.setFont("Helvetica-Bold", 13)
+        c.setFillColorRGB(*colour)
+        score = risk.get("score")
+        c.drawString(20 * mm, y,
+                     f"Risk level: {level}"
+                     + (f"  (score {score:.1f})"
+                        if isinstance(score, (int, float)) else ""))
+        c.setFillColorRGB(0, 0, 0)
+        y -= 6 * mm
+        c.setFont("Helvetica", 9)
+        for line in _wrap(str(risk.get("headline") or ""), 115):
+            c.drawString(20 * mm, y, line)
+            y -= 4.5 * mm
+            if y < 30 * mm:
+                c.showPage(); y = H - 20 * mm
+
+        recs = risk.get("recommendations") or []
+        if recs:
+            y -= 2 * mm
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(20 * mm, y, "Recommendations")
+            y -= 5 * mm
+            c.setFont("Helvetica", 9)
+            for rec in recs[:8]:
+                for i, line in enumerate(_wrap(str(rec), 110)):
+                    c.drawString(24 * mm if i == 0 else 26 * mm, y,
+                                 ("• " + line) if i == 0 else line)
+                    y -= 4.5 * mm
+                    if y < 30 * mm:
+                        c.showPage(); y = H - 20 * mm
+
+        limits = risk.get("limits") or []
+        if limits:
+            y -= 2 * mm
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(20 * mm, y, "Limits of this assessment")
+            y -= 4.5 * mm
+            c.setFont("Helvetica-Oblique", 8)
+            for lim in limits[:6]:
+                for i, line in enumerate(_wrap(str(lim), 125)):
+                    c.drawString(24 * mm if i == 0 else 26 * mm, y,
+                                 ("– " + line) if i == 0 else line)
+                    y -= 4 * mm
+                    if y < 30 * mm:
+                        c.showPage(); y = H - 20 * mm
+        y -= 4 * mm
 
     c.setFont("Helvetica-Bold", 12)
     c.drawString(20 * mm, y, f"Components detected: {result.get('component_total', 0)}")

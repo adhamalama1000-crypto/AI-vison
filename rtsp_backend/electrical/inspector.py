@@ -31,7 +31,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 
-from . import expert, panel_type, postprocess as pp, taxonomy as tax
+from . import expert, panel_type, postprocess as pp, risk, taxonomy as tax
 
 _log = logging.getLogger("rtsp_backend.electrical.inspector")
 
@@ -369,6 +369,10 @@ def build_report(result: dict) -> dict:
         },
         "possible_missing_components": missing,
         "potential_maintenance_notes": notes,
+        # Aggregate of the two sections above plus detection quality. Reported as
+        # 'unknown' rather than 'low' when there is no basis to score — see
+        # rtsp_backend.electrical.risk.
+        "risk_assessment": risk.assess(result).to_dict(),
         "confidence_statistics": {
             **conf,
             "detection_gate": diag,

@@ -50,6 +50,10 @@ from .util import read_upload_capped, save_image
 #: response says so rather than returning ten thousand boxes.
 MAX_COMPONENTS = 500
 
+#: Cap on images per batch request. Unbounded batching is a memory-exhaustion
+#: vector, and a 500-image request would hold the connection open for minutes.
+MAX_BATCH_IMAGES = 50
+
 
 async def _image_from(ctx, upload: Optional[UploadFile],
                       camera_id: Optional[str]) -> tuple[np.ndarray, str]:
@@ -155,6 +159,14 @@ def _report_payload(result: dict) -> dict:
             "confidence": panel.get("confidence"),
             "function": panel.get("function"),
         },
+        # Aggregate risk level, from rtsp_backend.electrical.risk. Reported as
+        # 'unknown' with assessable=false when there is no basis to score — never
+        # as 'low', because "we could not look" and "we found nothing wrong" mean
+        # opposite things and must not read alike.
+        "risk": (result.get("report") or {}).get("risk_assessment") or {},
+        "recommendations": (
+            ((result.get("report") or {}).get("risk_assessment") or {})
+            .get("recommendations") or []),
         "component_total": result.get("component_total", 0),
         "component_counts": result.get("component_counts") or {},
         "maintenance_notes": result.get("maintenance_notes") or [],
@@ -272,6 +284,103 @@ def build_router(ctx) -> APIRouter:
                  json.dumps(summary), time.time()))
 
         return payload
+
+    @r.post("/analyze/batch")
+    async def analyze_batch(
+        files: list[UploadFile] = File(
+            ..., description="Panel images. All are analysed in one request."),
+        batch_size: int = Query(
+            8, ge=1, le=32,
+            description="Forward-pass batch size. Larger uses more memory; it "
+                        "only helps on a backend with real batching."),
+        report: bool = Query(
+            False, description="Include the full per-image report. Off by "
+                               "default — for a 50-image batch it dominates the "
+                               "response."),
+        min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    ):
+        """Analyse several images in one request, batching the forward pass.
+
+        For folder-scale work — re-scoring an archive, or checking a capture batch.
+        The per-image results are identical to ``/analyze``; only the throughput
+        differs, and only on a backend that genuinely batches (see
+        ``/api/panel/model`` → ``supports_true_batching``).
+
+        Deliberately capped: an unbounded batch is a memory-exhaustion vector, and
+        a 500-image request would hold the connection open for minutes.
+        """
+        if not files:
+            raise RTSPBackendError("No files were uploaded.", status_code=400,
+                                   code="no_files")
+        if len(files) > MAX_BATCH_IMAGES:
+            raise RTSPBackendError(
+                f"Batch of {len(files)} exceeds the {MAX_BATCH_IMAGES}-image cap. "
+                f"Split it into smaller requests.",
+                status_code=413, code="batch_too_large")
+
+        frames: list[np.ndarray] = []
+        names: list[str] = []
+        rejected: list[dict] = []
+        for upload in files:
+            raw = await read_upload_capped(upload, ctx.max_upload_bytes)
+            img = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8),
+                               cv2.IMREAD_COLOR)
+            if img is None:
+                # One bad file must not fail the whole batch — it is reported and
+                # the rest proceed.
+                rejected.append({"filename": upload.filename,
+                                 "reason": "not a decodable image"})
+                continue
+            frames.append(img)
+            names.append(upload.filename or f"image_{len(names)}")
+
+        if not frames:
+            raise RTSPBackendError("No uploaded file was a decodable image.",
+                                   status_code=400, code="bad_image")
+
+        started = time.perf_counter()
+        results = await asyncio.to_thread(
+            panel_svc.analyze_batch, ctx.ai, frames, batch_size)
+        elapsed = time.perf_counter() - started
+
+        backend = ctx.ai.backend("components") if ctx.ai is not None else None
+        items = []
+        for name, frame, result in zip(names, frames, results):
+            result.pop("_annotated", None)
+            components = _components_payload(result)
+            if min_confidence > 0.0:
+                components = [c for c in components
+                              if c["confidence"] >= min_confidence]
+            entry = {
+                "filename": name,
+                "image": {"width": int(frame.shape[1]),
+                          "height": int(frame.shape[0])},
+                "components": components,
+                "component_total": len(components),
+            }
+            if report:
+                entry["report"] = _report_payload(result)
+            items.append(entry)
+
+        return {
+            "results": items,
+            "images": len(items),
+            "rejected": rejected,
+            "batch_size": batch_size,
+            "true_batching": bool(
+                getattr(backend, "supports_true_batching", False)),
+            "model": {"loaded": bool(
+                backend is not None and getattr(backend, "ready", False)),
+                "backend": getattr(backend, "backend_id", None)},
+            "bbox_format": "xyxy_absolute_pixels",
+            "duration_ms": round(elapsed * 1000.0, 1),
+            "ms_per_image": round(elapsed * 1000.0 / len(items), 1),
+            "note": (
+                None if getattr(backend, "supports_true_batching", False) else
+                "This backend has no real batched forward pass, so the images were "
+                "processed sequentially. The timing is per-image cost, not a "
+                "batching speed-up."),
+        }
 
     @r.get("/classes")
     async def panel_classes():

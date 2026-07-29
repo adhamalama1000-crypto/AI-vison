@@ -167,6 +167,9 @@ def autolabel_directory(image_dir: str, out_root: str,
                         split: str = "train",
                         limit: Optional[int] = None,
                         copy_images: bool = True,
+                        refine_boxes: bool = True,
+                        sam_weights: Optional[str] = None,
+                        device: str = "cpu",
                         log: Optional[Callable[[str], None]] = None) -> dict:
     """Pre-label every image in ``image_dir`` into a YOLO dataset at ``out_root``.
 
@@ -174,6 +177,13 @@ def autolabel_directory(image_dir: str, out_root: str,
     result imports straight into a labelling tool, plus
     ``autolabel_manifest.json`` holding the per-image verdicts and the review
     queue ordered worst-first.
+
+    With ``refine_boxes`` (default), every detector box is tightened by SAM2 via
+    :mod:`training.electrical.refine` — open-vocabulary boxes are loose enough that
+    correcting their edges costs a labeller as much as drawing from scratch. Each
+    refinement is guard-checked and rejected if it grows, collapses or drifts, and
+    the manifest reports the accept rate so the benefit is measurable. Refinement is
+    skipped, with a stated reason, when no SAM backend is installed.
     """
     say = log or (lambda m: None)
     if review > accept:
@@ -214,11 +224,28 @@ def autolabel_directory(image_dir: str, out_root: str,
     os.makedirs(d_img, exist_ok=True)
     os.makedirs(d_lbl, exist_ok=True)
 
+    refiner = None
+    refine_status = {"enabled": False, "reason": "not requested"}
+    if refine_boxes:
+        from . import refine as rf
+
+        refiner = rf.SamRefiner(weights=sam_weights, device=device, log=say)
+        refine_status = {
+            "enabled": refiner.ready,
+            "backend": refiner.backend,
+            "weights": refiner.weights,
+            "reason": refiner.reason,
+        }
+        if not refiner.ready:
+            say("box refinement disabled — proceeding with the detector's own "
+                "boxes, which are looser")
+
     idx = tax.class_index()
     unknown_index = idx.get(tax.UNKNOWN_COMPONENT_ID)
     verdicts: list[ImageVerdict] = []
     totals: Counter = Counter()
     unreadable: list[str] = []
+    all_refinements: list = []
 
     for n, fn in enumerate(files, 1):
         path = os.path.join(image_dir, fn)
@@ -234,17 +261,30 @@ def autolabel_directory(image_dir: str, out_root: str,
             unreadable.append(fn)
             continue
 
+        # Apply the confidence floor first, then refine only the survivors: there
+        # is no point paying SAM inference on boxes that are about to be dropped.
+        kept_dets = [(cid, box, score) for cid, box, score in dets
+                     if score >= review]
+        discarded = len(dets) - len(kept_dets)
+
+        if refiner is not None and refiner.ready and kept_dets:
+            refined = refiner.refine(
+                img, [d[1] for d in kept_dets], [d[0] for d in kept_dets])
+            all_refinements.extend(refined)
+            # RefinedBox.box is the refined geometry when the guards accepted it and
+            # the original when they did not, so a rejected refinement silently
+            # keeps the detector's box rather than losing the detection.
+            kept_dets = [(cid, r.box, score)
+                         for (cid, _orig, score), r in zip(kept_dets, refined)]
+        dets = kept_dets
+
         lines: list[str] = []
         scores: list[float] = []
         classes: Counter = Counter()
-        discarded = 0
         has_low = False
         has_unknown = False
 
         for cid, box, score in dets:
-            if score < review:
-                discarded += 1
-                continue
             if score < accept:
                 has_low = True
             # An honest unknown stays unknown. The whole point of this pass is to
@@ -308,6 +348,8 @@ def autolabel_directory(image_dir: str, out_root: str,
         key=lambda v: (0 if v.verdict == "uncertain" else 1,
                        v.min_confidence if v.min_confidence is not None else 0.0))
 
+    from . import refine as rf
+
     manifest = {
         "status": "labelled",
         "backend": backend_id,
@@ -315,6 +357,10 @@ def autolabel_directory(image_dir: str, out_root: str,
         "out_root": out_root,
         "split": split,
         "thresholds": {"accept": accept, "review": review},
+        "box_refinement": {
+            **refine_status,
+            **(rf.refine_summary(all_refinements) if all_refinements else {}),
+        },
         "images_processed": len(verdicts),
         "images_unreadable": unreadable,
         "boxes_written": int(sum(v.boxes for v in verdicts)),

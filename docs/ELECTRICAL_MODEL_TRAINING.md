@@ -141,12 +141,35 @@ One failing upstream project does not abort the batch. Read the `failed` reasons
 attribution**: keep that manifest with the trained model and credit each dataset
 in the model card.
 
-### 3. Merge and split
+### 3. Merge, deduplicate, and split
 
 ```bash
-python -m training.electrical.cli merge --roots data/raw/rf_* --dst data/merged
-python -m training.electrical.cli split --src data/merged --dst data/final
+python -m training.electrical.cli merge --roots data/raw/rf_* --dst data/merged --dedup
+python -m training.electrical.cli split --src data/merged_dedup --dst data/final
 ```
+
+**Do not skip `--dedup`.** Two of the registry's sources are probably the same
+photographs republished, and Roboflow exports contain augmented copies of every
+original. If a duplicate straddles train and val, validation is scoring
+memorisation and the mAP you get back is fiction. Check it independently:
+
+```bash
+python -m training.electrical.cli dedup --root data/merged
+```
+
+Read-only by default, and **exits non-zero when any duplicate group straddles a
+split**, so CI can gate on it. Detection is dHash + aHash within a Hamming distance
+of 5, plus an exact-content pass; measured on panel imagery, brightness, JPEG q30,
+blur and a half-resolution round trip all give a distance of 0–1 while two different
+panels give 16–22, so the threshold sits in a wide gap. Add `--dst` to write a
+cleaned copy; it keeps the **training** copy and drops the val/test one, which is the
+only direction that leaves evaluation data unseen.
+
+Two behaviours worth knowing: duplicates whose **labels disagree** are kept in full
+and reported rather than resolved by picking one (that is a human's call, and one of
+the two annotations is wrong); and near-featureless images — lens cap, blown
+exposure, uniform wall — cannot be hashed reliably, so filter those at capture
+rather than trusting dedup on them.
 
 `split` produces the 80/10/10 division — **grouped by capture, not by image**.
 
@@ -221,17 +244,96 @@ not Ultralytics knobs; they arrive through the Albumentations transforms
 Ultralytics applies automatically when `albumentations` is installed, and through
 `training.electrical.synthetic`'s nuisance factors for composited data.
 
-Pick the architecture with a measurement, not an opinion:
+### 5b. Pick the architecture by measurement, not opinion
 
 ```bash
 python -m training.electrical.cli bench --data data/final/dataset.yaml \
-    --root data/final --archs yolo11s yolo11m rtdetr-l --epochs 60
+    --root data/final --archs yolo11n yolo11s yolo11m rtdetr-l --epochs 60
 ```
 
-RT-DETR is worth measuring here: it tends to win on densely packed scenes, and a
-DIN rail full of adjacent modular devices is exactly that. An architecture the
-installed Ultralytics build cannot construct is reported as `skipped` with the
-reason — never silently substituted.
+This trains each architecture on the same split, then measures **both halves**:
+accuracy (mAP@50, mAP@50-95, precision, recall, F1) and cost (p50/p95/p99 latency,
+FPS, peak RSS delta, parameter count), and picks a winner automatically.
+
+Ranking on mAP alone always picks the largest model, and for a platform whose
+default deployment is ONNX Runtime on CPU that is usually wrong — a few points of
+mAP for six times the latency is a bad trade on a 4-core box. So selection is a
+weighted score over accuracy and speed, with a **hard latency budget** (default
+4000 ms p95) that *disqualifies* rather than penalises, and it prints what it traded
+away:
+
+```
+1  yolo11s   0.539  mAP50-95 0.490  p95  520 ms
+2  yolo11m   0.528  mAP50-95 0.520  p95 1450 ms
+NOTE: rtdetr-l is more accurate (mAP@50-95 0.530, 0.040 higher) but slower
+(2100 ms vs 520 ms p95). If accuracy matters more than latency, override with
+--weights or raise the latency budget.
+Disqualified: yolo11x (p95 latency 6200 ms exceeds the 4000 ms budget).
+```
+
+Override the trade when your deployment justifies it:
+
+```bash
+# accuracy first (GPU deployment, latency is not the constraint)
+--weights '{"map_50_95":0.80,"map_50":0.10,"f1":0.08,"speed":0.02}' \
+    --latency-budget 10000
+# speed first (many cameras on modest CPU)
+--weights '{"map_50_95":0.15,"map_50":0.05,"f1":0.05,"speed":0.75}'
+```
+
+Timing is done properly: warmup runs are discarded (the first inference pays lazy
+graph init), real images are required because detector latency is data-dependent
+through NMS, percentiles are reported rather than just a mean, and the thread count
+and environment are recorded so the numbers are reproducible. Anything unmeasurable
+— no `psutil`, no torch for parameter counts — comes back `None` with a reason, never
+an estimate.
+
+Profile a single already-trained model:
+
+```bash
+python -m training.electrical.cli profile --root data/final \
+    --weights runs/electrical/yolo11s/weights/best.pt --runs 50
+```
+
+RT-DETR is worth including: it tends to win on densely packed scenes, and a DIN rail
+full of adjacent modular devices is exactly that. An architecture the installed
+Ultralytics build cannot construct is reported as `skipped` with the reason — never
+silently substituted.
+
+### 5c. Hyperparameter search
+
+The `TrainConfig` defaults are hand-reasoned and documented, but they were never
+searched. This searches them:
+
+```bash
+python -m training.electrical.cli hpo --data data/final/dataset.yaml \
+    --root data/final --arch yolo11s --trials 20 --epochs 20 --device 0
+```
+
+Covers learning rate, batch size, image size, optimizer, LR schedule, warmup, weight
+decay, early-stopping patience and the full augmentation block. The reference run
+uses the hand-tuned defaults first, so the search has something to beat — and if it
+does not beat them by more than noise, the output says so and tells you to keep the
+defaults.
+
+Three things to know:
+
+- **`fliplr` and `flipud` are held at 0 by default and never sampled.** A search
+  maximising validation mAP on a small dataset will switch horizontal flip on, because
+  it looks like free augmentation, and produce a model that has learned mirrored
+  nameplates and reversed device markings are normal. Physical correctness is not a
+  tunable. `--no-respect-domain-priors` searches them anyway; the flag exists so the
+  decision is deliberate.
+- **Pruning is real.** A per-epoch Ultralytics callback reports intermediate mAP to
+  Optuna's median pruner, so a trial that is clearly behind stops instead of running
+  to completion.
+- **It cannot fix a data problem.** Pointed at a dataset where `cli gap` reports
+  classes with zero annotations, it says so up front rather than spending GPU hours
+  tuning a class that has no examples.
+
+Studies are stored in SQLite under `runs/electrical/`, so an interrupted six-hour
+search resumes rather than restarting. The search uses short runs to *rank* the
+space; train the winner properly afterwards with `cli train`.
 
 ### 6. Evaluate
 
@@ -263,14 +365,32 @@ Compare against the zero-shot baseline to know whether training actually helped 
 ### 7. Export and install
 
 ```bash
+# capture the accuracy evidence first, so the bundle can carry it
+python -m training.electrical.cli eval --root data/final \
+    --backend industrial_ultralytics \
+    --params '{"weights":"runs/electrical/yolo11s/weights/best.pt"}' \
+    > dist/eval.json
+
 python -m training.electrical.cli export \
     --weights runs/electrical/yolo11s/weights/best.pt \
-    --out dist/model --imgsz 960 --data data/final/dataset.yaml --install
+    --out dist/model --imgsz 960 --data data/final/dataset.yaml \
+    --eval-json dist/eval.json --install
 ```
 
-Produces `best.pt`, `best.onnx`, `labels.txt`, `classes.json` and
-`model_card.json`, then verifies the bundle the way the runtime will read it and
-refuses to install one that would mislabel.
+Produces `best.pt`, `best.onnx`, `labels.txt`, `classes.json`,
+`model_card.json`, `metrics.json` and an `artifacts/` directory holding the
+confusion matrix, PR/F1/P/R curves, loss curves, `results.csv` and the exact
+training `args.yaml`. It then verifies the bundle the way the runtime will read it,
+and refuses to install one that would mislabel.
+
+The evidence matters as much as the weights. A deployed model with no record of its
+own measured accuracy cannot be audited, and "what was this model's per-class recall?"
+has no answer six months later. `--eval-json` is what puts that record in the bundle;
+without it the export warns. Curves come from Ultralytics' own plots when it wrote
+them, and are rendered from `results.csv` when it did not (an RT-DETR run, or
+`plots=False`). The confusion matrix is rendered from *our* evaluation, so its axes are
+readable device names rather than integer indices, and it plots only the classes that
+actually appear — a 54×54 grid of zeros tells you nothing.
 
 That verification is not ceremony. An earlier version of this platform shipped a
 `labels.txt` containing the literal lines `0`…`9`, so every detection came back
@@ -337,6 +457,30 @@ Auto-labelling makes a human *correct* boxes instead of drawing them — a 3–5
 speed-up on the several hundred hours the shortfall represents. It uses a trained
 checkpoint when one exists, and falls back to zero-shot OWLv2 / Grounding DINO for
 round one (`pip install -r requirements-openvocab.txt`).
+
+**Boxes are tightened with SAM2 by default.** This is not decoration:
+open-vocabulary detectors are trained on natural-image captions, so their boxes
+routinely include a strip of DIN rail, the neighbouring module and the wire loom —
+and correcting a loose box costs as much as drawing a new one, which destroys the
+speed-up. SAM2 is used as a *promptable segmenter*: each detector box becomes a box
+prompt, and the tight bounds of the returned mask replace the loose box. Detection
+stays the detector's job; localisation becomes SAM2's.
+
+Every refinement is guard-checked, because SAM fails in predictable ways on panel
+imagery and an unchecked "tighter" box is worse than a loose one:
+
+| Guard | Catches |
+|---|---|
+| must not grow beyond 1.6× area | segmented the **whole DIN-rail row** (modules are visually continuous) |
+| must not shrink below 0.35× area | segmented only the **toggle lever** or one terminal |
+| centre must not drift >0.35 of the box diagonal | segmented the **neighbouring device** |
+| aspect ratio must fit the class's taxonomy prior | an MCB is never 8:1 wide |
+
+A failed guard keeps the original box and counts the reason. The manifest reports the
+accept rate and mean IoU shift, so "is SAM helping on my imagery?" has a number: a low
+accept rate dominated by `grew_beyond_limit` means it is segmenting rows, and
+`--no-refine` saves you the compute. Without a SAM backend installed, refinement is
+skipped with a stated reason and labelling proceeds on the detector's own boxes.
 
 Every image gets a verdict in `autolabel_manifest.json`:
 

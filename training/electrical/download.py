@@ -306,6 +306,137 @@ def fetch_url(locator: str, dest: str,
     return dest
 
 
+def fetch_github(locator: str, dest: str,
+                 log: Optional[Callable[[str], None]] = None) -> str:
+    """Download a GitHub repository archive or release asset.
+
+    ``locator`` forms:
+
+    ``owner/repo``
+        Default-branch tarball.
+    ``owner/repo@ref``
+        A branch, tag or commit archive — **prefer this**, because a default-branch
+        download is not reproducible: the same command a month later gives different
+        bytes.
+    ``owner/repo::path/to/asset.zip@tag``
+        A release asset, which is how most dataset repositories publish the actual
+        images (git is a bad host for a few thousand JPEGs).
+    """
+    say = log or (lambda m: None)
+    if "<" in locator:
+        raise DownloadError(f"'{locator}' is a placeholder, not a GitHub locator")
+
+    asset: Optional[str] = None
+    body = locator
+    if "::" in body:
+        body, asset = body.split("::", 1)
+    ref: Optional[str] = None
+    if "@" in (asset or body):
+        if asset and "@" in asset:
+            asset, ref = asset.rsplit("@", 1)
+        elif "@" in body:
+            body, ref = body.rsplit("@", 1)
+
+    parts = [p for p in body.split("/") if p]
+    if len(parts) != 2:
+        raise DownloadError(
+            f"'{locator}' is not a GitHub locator. Expected 'owner/repo', "
+            f"'owner/repo@ref', or 'owner/repo::asset.zip@tag'.")
+    owner, repo = parts
+
+    if asset:
+        if not ref:
+            raise DownloadError(
+                f"a release asset needs a tag: 'owner/repo::{asset}@<tag>'. "
+                f"Downloading 'latest' is not reproducible.")
+        url = (f"https://github.com/{owner}/{repo}/releases/download/"
+               f"{ref}/{asset}")
+    else:
+        if not ref:
+            say("no ref pinned — using the default branch. This is NOT "
+                "reproducible; pin a tag or commit with 'owner/repo@ref'.")
+            ref = "HEAD"
+        url = f"https://github.com/{owner}/{repo}/archive/{ref}.tar.gz"
+
+    os.makedirs(dest, exist_ok=True)
+    archive = os.path.join(dest, asset or f"{repo}-{ref}.tar.gz")
+    _http_download(url, archive, log=say)
+    _extract(archive, dest)
+    os.remove(archive)
+    return dest
+
+
+def fetch_openimages(locator: str, dest: str,
+                     max_samples: Optional[int] = 2000,
+                     log: Optional[Callable[[str], None]] = None) -> str:
+    """Download an Open Images V7 class subset and convert it to YOLO.
+
+    ``locator`` is a comma-separated list of Open Images class display names, e.g.
+    ``"Light switch,Power plugs and sockets"``.
+
+    Open Images is ~9M images and ~500 GB; downloading it whole to find a few
+    hundred relevant boxes is not a plan. FiftyOne's partial downloader pulls only
+    the images containing the requested classes, which is the only practical route,
+    so it is a hard requirement here rather than an optional convenience.
+
+    **Read this before using it.** Open Images has no industrial electrical classes.
+    Its nearest neighbours are domestic — "Light switch", "Power plugs and sockets"
+    — and they are not the same objects as a panel-mounted 22 mm actuator or a
+    DIN-rail MCB. This fetcher exists because the brief names Open Images and
+    because those classes are genuinely useful as **hard negatives** (teaching the
+    detector what is *not* a push button), not because they contribute positive
+    instances. The registry entry says the same thing.
+    """
+    say = log or (lambda m: None)
+    if "<" in locator:
+        raise DownloadError(f"'{locator}' is a placeholder, not a class list")
+    classes = [c.strip() for c in locator.split(",") if c.strip()]
+    if not classes:
+        raise DownloadError("no Open Images class names given")
+
+    try:
+        import fiftyone as fo  # type: ignore
+        import fiftyone.zoo as foz  # type: ignore
+    except ImportError as exc:
+        raise DownloadError(
+            f"fiftyone is required to pull an Open Images subset ({exc}). "
+            f"pip install fiftyone. Downloading Open Images without it means "
+            f"fetching the whole ~500 GB release to keep a few hundred images, "
+            f"which is why there is no fallback here.") from exc
+
+    os.makedirs(dest, exist_ok=True)
+    say(f"Open Images V7: classes={classes} max_samples={max_samples}")
+    try:
+        dataset = foz.load_zoo_dataset(
+            "open-images-v7", split="train", label_types=["detections"],
+            classes=classes, max_samples=max_samples,
+            dataset_name=f"oi_electrical_{abs(hash(locator)) % 10 ** 8}",
+            shuffle=True, seed=51)
+    except Exception as exc:
+        raise DownloadError(f"FiftyOne could not load the subset: {exc}") from exc
+
+    export_dir = os.path.join(dest, "yolo")
+    try:
+        dataset.export(
+            export_dir=export_dir,
+            dataset_type=fo.types.YOLOv5Dataset,
+            label_field="ground_truth",
+            classes=classes,
+            split="train")
+    except Exception as exc:
+        raise DownloadError(f"FiftyOne YOLO export failed: {exc}") from exc
+    finally:
+        # FiftyOne keeps datasets in a local Mongo; leaving hundreds of named
+        # datasets behind across runs slows every later call.
+        try:
+            dataset.delete()
+        except Exception:
+            pass
+
+    say(f"exported {len(classes)} class(es) to {export_dir}")
+    return export_dir
+
+
 # --------------------------------------------------------------------------
 # layout normalisation
 # --------------------------------------------------------------------------
@@ -471,6 +602,10 @@ def download_source(key: str, dst_root: str,
             fetch_kaggle(loc, raw_dir, log=say)
         elif src.kind == "url":
             fetch_url(loc, raw_dir, log=say)
+        elif src.kind == "github":
+            fetch_github(loc, raw_dir, log=say)
+        elif src.kind == "openimages":
+            fetch_openimages(loc, raw_dir, log=say)
         else:
             return DownloadResult(key, "failed",
                                   f"no fetcher for kind '{src.kind}'")
