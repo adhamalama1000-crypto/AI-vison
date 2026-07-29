@@ -247,12 +247,46 @@ Thresholds (`training/electrical/datasets.py`): below **50** instances a class w
 not train usefully; below **300** it trains but stays unreliable. These are
 working rules of thumb for detection fine-tuning, not guarantees.
 
+### 4b. Reduce the class scope — the highest-leverage change you can make
+
+**Do not train 54 classes first.** mAP is a mean over classes, so 54 classes on thin
+data averages to a number no confidence threshold can rescue. 15 classes with several
+hundred instances each is a model that works.
+
+```bash
+python -m training.electrical.cli scope --list --name core15   # the 15 priority classes
+python -m training.electrical.cli scope --name core15 --src data/final --dst data/core15
+```
+
+Three profiles ship: `core15` (the priority class list), `core18` (adds
+`overload_relay`, `din_rail`, `circuit_breaker` — appended, so a `core15` checkpoint
+fine-tunes onto it), and `full` (all 54, the eventual target rather than a starting
+point).
+
+`scope` filters the dataset **and remaps every index to 0..N-1**. That remapping is the
+part that must not be skipped: a dataset filtered to 15 classes but still carrying
+54-class indices trains a 15-class head against indices scattered up to 53. The loss
+falls, the run looks healthy, every prediction is garbage, and no trainer warns you.
+
+- Images left with no in-profile boxes are **kept as negatives** — they teach the
+  detector not to fire on out-of-profile devices. Cap them around 10–15% of the training
+  set; `--drop-empty` removes them.
+- `--only-present` narrows the profile to classes that actually have data. An absent
+  class adds a zero to the mAP mean and nothing to the model.
+
+A profile bundle needs **no runtime change**: the recogniser reads its label space from
+`classes.json` and canonicalises through the taxonomy, so a 15-class model still returns
+canonical ids and still falls back to `unknown_industrial_component` when unsure.
+
+Full plan, data requirements per target mAP, and capture priority:
+[`docs/PATH_TO_PRODUCTION_MODEL.md`](PATH_TO_PRODUCTION_MODEL.md).
+
 ### 5. Train
 
 ```bash
 python -m training.electrical.cli train \
-    --data data/final/dataset.yaml --arch yolo11s \
-    --epochs 120 --imgsz 960 --batch 8 --device 0
+    --data data/core15/dataset.yaml --arch yolo11m \
+    --epochs 150 --imgsz 960 --batch 16 --device 0
 ```
 
 Defaults are tuned for panel imagery rather than copied from COCO, and each choice

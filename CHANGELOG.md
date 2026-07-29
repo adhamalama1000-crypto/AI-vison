@@ -1,5 +1,94 @@
 # Changelog
 
+## [5.5.0] — Focused class scope, and the road to 85% mAP
+
+The 54-class taxonomy is the right *inference* vocabulary and the wrong *training*
+label space for a first production model. mAP is a mean over classes, so 54 classes on
+thin data averages to a number no confidence threshold can rescue; 15 classes with
+several hundred instances each is a model that works.
+
+### Class profiles
+
+- **`training/electrical/profiles.py`** — named, ordered subsets of the taxonomy to
+  train against. `core15` is exactly the requested priority list; `core18` appends
+  `overload_relay` (the contactor-without-overload check is one of the report's most
+  useful findings), `din_rail` and `circuit_breaker`; `full` is all 54. `core18` is an
+  append-only superset of `core15`, so a `core15` checkpoint fine-tunes onto it rather
+  than needing a retrain.
+- **`cli scope`** filters a dataset to a profile **and remaps every label index to
+  0..N-1**. That remapping is the whole point: a dataset filtered to 15 classes but
+  still carrying 54-class indices trains a 15-class head against indices scattered up
+  to 53 — the loss falls, the run looks healthy, every prediction is garbage, and no
+  trainer warns you. It has its own tests.
+- Images left with no in-profile boxes are **kept as negatives** by default, because an
+  image of only out-of-profile devices is how a detector learns not to fire on them.
+  `--drop-empty` removes them; the warning suggests capping negatives at 10–15%.
+- **`--only-present`** narrows a profile to the classes that actually have data. An
+  absent class contributes a zero to the mAP mean and nothing to the model, so
+  reporting a 15-class mAP with 7 empty classes misleads in both directions.
+- **No runtime change needed.** A profile bundle ships a matching `classes.json`; the
+  recogniser reads it and canonicalises through the taxonomy, so a 15-class model still
+  returns canonical ids and still falls back to `unknown_industrial_component`.
+- **"Switch" was read as `selector_switch`** — the taxonomy distinguishes selector,
+  changeover and Ethernet switches, and the brief lists it beside emergency stop and
+  indicator lamp. Documented, with `core18` available if a transfer switch was meant.
+
+### Data requirement, quantified
+
+`requirement_estimate()` derives what each mAP target costs, as bands rather than
+points because the real figure depends on intra-class visual variety — a property of the
+capture programme, not the model:
+
+| Target mAP50 | Instances/class | 15-class total | Images |
+|---|---|---|---|
+| 0.50 | 150–300 | 2,250–4,500 | ~700–1,400 |
+| 0.70 | 300–600 | 4,500–9,000 | ~1,400–2,800 |
+| **0.85** | **700–1,200** | **10,500–18,000** | **~3,300–5,600** |
+| 0.92 | 1,500–2,500 | 22,500–37,500 | ~7,000–11,700 |
+
+The image count is deliberately *not* instances ÷ boxes-per-image: a panel photograph
+yields ~12 boxes but only ~4 distinct classes, and an image full of MCBs contributes
+nothing to the VFD count. That co-occurrence factor is why 10,500 instances needs ~3,300
+images rather than ~875.
+
+**[`docs/PATH_TO_PRODUCTION_MODEL.md`](docs/PATH_TO_PRODUCTION_MODEL.md)** is the full
+plan: class scope, data requirement per target, capture priority ordered by
+instances-per-hour, the training recipe, and acceptance criteria that gate on per-class
+recall rather than headline mAP.
+
+### Class reduction measured
+
+Retraining with the reduced scope, on a dataset engineered to sit inside the
+700–1,200 instances-per-class band (600 train / 120 val, 8 classes at ~970 instances
+each):
+
+| | Previous run | Reduced scope |
+|---|---|---|
+| Classes | 54 | 8 |
+| Images | 120 | 600 |
+| mAP50 after 1 epoch | — | **0.145** |
+| mAP50 after 8 epochs (whole previous run) | **0.0021** | — |
+
+A single epoch of the reduced-scope run beat the entire previous run by ~69×. Full
+curve in [`docs/AUDIT_v5.2.0.md`](docs/AUDIT_v5.2.0.md). Read it for what it is: the
+recipe and the class-reduction mechanism measured on *synthetic* imagery. It says nothing
+about real-world accuracy — what it establishes is that the bottleneck is data, not the
+pipeline, which is the question worth answering before spending four weeks photographing
+panels.
+
+### Still blocked on data, and two of the blockers are not code
+
+- **~3,500 public images exist in total**, ~5,300 instances, 6 classes viable. Public
+  data reaches roughly the 0.50 band on 6 classes; it cannot reach 0.85 on 15.
+- **`ROBOFLOW_API_KEY` is unset and the Roboflow connector's token has expired**, so
+  even those ~3,500 images cannot be downloaded from here. Needs re-authorization.
+- **`control-panel-azure/control-panels` has no generated version** — the best public
+  source of modular DIN-rail instances (~703 MCB boxes). Needs a fork and a version.
+- **~2,000–4,000 real panel photographs** are the actual answer. The capture protocol,
+  labelling guide, SAM2-refined pre-labelling and review loop are all built.
+
+785 tests passing (750 → 785; 35 new for profiles).
+
 ## [5.4.0] — Verified by a real training run
 
 The pipeline was executed for real rather than reasoned about: torch 2.13 +

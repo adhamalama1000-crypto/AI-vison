@@ -139,6 +139,60 @@ def cmd_split(args) -> int:
     return 0
 
 
+def cmd_scope(args) -> int:
+    """List class profiles, or filter a dataset down to one.
+
+    Named cmd_scope, not cmd_profile: cmd_profile is the runtime latency profiler
+    further down this file, and defining two functions with one name silently keeps
+    only the last.
+    """
+    from training.electrical import profiles as pf
+
+    if args.list or not args.src:
+        out = pf.list_profiles()
+        if args.name:
+            prof = pf.get(args.name)
+            out["selected"] = prof.to_dict()
+            out["requirement"] = pf.requirement_estimate(prof, args.target_map)
+        _dump(out)
+        if not args.src and not args.list:
+            _stderr("\n(no --src given, so nothing was filtered — pass --src and "
+                    "--dst to produce a profile dataset)")
+        return 0
+
+    if not args.dst:
+        _stderr("error: --dst is required with --src")
+        return 2
+    try:
+        prof = pf.get(args.name or pf.DEFAULT_PROFILE)
+    except KeyError as exc:
+        _stderr(f"error: {exc}")
+        return 2
+
+    if args.only_present:
+        present = pf.present_classes(args.src, prof,
+                                     min_instances=args.min_instances)
+        if not present:
+            _stderr(f"error: none of profile '{prof.name}'s classes have at least "
+                    f"{args.min_instances} instance(s) in {args.src}")
+            return 1
+        if len(present) < prof.class_count:
+            _stderr(f"narrowing '{prof.name}' from {prof.class_count} to "
+                    f"{len(present)} class(es) with data — an absent class adds a "
+                    f"zero to the mAP mean and nothing to the model")
+        prof = pf.derive(prof, present)
+
+    stats = pf.apply(args.src, args.dst, prof, drop_empty=args.drop_empty,
+                     symlink=args.symlink, log=_stderr)
+    stats["profile_detail"] = prof.to_dict()
+    stats["requirement"] = pf.requirement_estimate(prof, args.target_map)
+    _dump(stats)
+    for w in stats["warnings"]:
+        _stderr(f"\nwarning: {w}")
+    # No usable instances means the filter produced nothing trainable.
+    return 0 if stats["instances_kept"] else 1
+
+
 def cmd_quality(args) -> int:
     """Structural and image-quality inspection of a dataset."""
     from training.electrical import quality as ql
@@ -611,6 +665,34 @@ def build_parser() -> argparse.ArgumentParser:
                          "time.")
     ap.add_argument("--symlink", action="store_true")
     ap.set_defaults(func=cmd_split)
+
+    # Named 'scope' rather than 'profile': 'profile' is already the runtime
+    # latency/memory profiler, and that is the standard meaning of the word for a
+    # model. This one narrows the *class scope* of training.
+    ap = sub.add_parser("scope",
+                        help="list class profiles, or filter a dataset to one "
+                             "(fewer classes = more instances each = higher mAP)")
+    ap.add_argument("--list", action="store_true", help="list profiles and exit")
+    ap.add_argument("--name", help="profile name (default: core15)")
+    ap.add_argument("--src", help="canonically-labelled dataset root to filter")
+    ap.add_argument("--dst", help="output root for the profile dataset")
+    ap.add_argument("--drop-empty", action="store_true",
+                    help="also drop images left with no in-profile boxes. OFF by "
+                         "default: such an image is a genuine NEGATIVE for this "
+                         "profile, and negatives teach the detector not to fire on "
+                         "out-of-profile devices")
+    ap.add_argument("--symlink", action="store_true")
+    ap.add_argument("--only-present", action="store_true",
+                    help="narrow the profile to the classes that actually have data "
+                         "in --src. An absent class adds a zero to the mAP mean and "
+                         "nothing to the model, so reporting a 15-class mAP with 7 "
+                         "empty classes misleads in both directions")
+    ap.add_argument("--min-instances", type=int, default=1,
+                    help="with --only-present, the instance count a class needs to "
+                         "be kept")
+    ap.add_argument("--target-map", type=float, default=0.85,
+                    help="target mAP50 for the data-requirement estimate")
+    ap.set_defaults(func=cmd_scope)
 
     ap = sub.add_parser("quality",
                         help="corrupted files, bad labels, low-quality images, "
