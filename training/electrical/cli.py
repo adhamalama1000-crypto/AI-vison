@@ -761,7 +761,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="FP16 ONNX — GPU only, re-measure mAP after")
     ap.add_argument("--dynamic", action="store_true",
                     help="dynamic input shape (slower, more flexible)")
-    ap.add_argument("--data", help="dataset.yaml used, recorded in the model card")
+    ap.add_argument("--data",
+                    help="dataset.yaml the model was trained on. Recorded in the "
+                         "model card, and REQUIRED for a profile-trained model: the "
+                         "label space is read from it, otherwise the bundle defaults "
+                         "to the full 54-class taxonomy and its labels disagree with "
+                         "an N-class graph")
     ap.add_argument("--notes", help="free-text provenance for the model card")
     ap.add_argument("--run-dir",
                     help="Ultralytics run directory to harvest curves and the "

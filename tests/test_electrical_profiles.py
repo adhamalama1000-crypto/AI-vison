@@ -381,6 +381,52 @@ def test_a_higher_target_needs_more_data():
     assert hi["instances_per_class"]["low"] > lo["instances_per_class"]["low"]
 
 
+def test_export_takes_the_label_space_from_the_training_dataset(tmp_path):
+    """A profile-trained head is N classes, not 54.
+
+    Exporting it with the default full-taxonomy labels.txt ships a bundle whose labels
+    disagree with its graph. verify_bundle catches that, but the caller should not have
+    to hit the error to discover which label space to use — the dataset.yaml the model
+    was trained on is the authoritative record.
+    """
+    from training.electrical import export as ex
+
+    src = _dataset(str(tmp_path / "src"), ["mcb", "vfd"])
+    profile_root = str(tmp_path / "prof")
+    pf.apply(src, profile_root, pf.CORE15, log=lambda m: None)
+
+    read = ex.classes_for_dataset(os.path.join(profile_root, "dataset.yaml"))
+    assert read == list(pf.CORE15.classes)
+    assert len(read) == 15
+
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"not a real checkpoint")
+    res = ex.export_bundle(
+        str(weights), str(tmp_path / "bundle"),
+        metadata={"data": os.path.join(profile_root, "dataset.yaml")},
+        log=lambda m: None)
+
+    assert res["label_space"]["class_count"] == 15
+    assert res["label_space"]["profile"] == "core15"
+    labels = [ln.strip() for ln in
+              open(tmp_path / "bundle" / "labels.txt", encoding="utf-8")
+              if ln.strip()]
+    assert labels == list(pf.CORE15.classes)
+    data = json.load(open(tmp_path / "bundle" / "classes.json", encoding="utf-8"))
+    assert data["profile"] == "core15"
+
+
+def test_export_still_defaults_to_the_full_taxonomy_without_a_dataset(tmp_path):
+    from training.electrical import export as ex
+
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"x")
+    res = ex.export_bundle(str(weights), str(tmp_path / "b"),
+                           log=lambda m: None)
+    assert res["label_space"]["class_count"] == len(tax.CLASS_ORDER)
+    assert res["label_space"]["profile"] is None
+
+
 def test_the_85_percent_target_lands_in_the_thousands_of_images():
     """Sanity-checks the estimate against the brief's own 5000-image instinct."""
     est = pf.requirement_estimate(pf.CORE15, 0.85)
