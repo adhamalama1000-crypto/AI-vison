@@ -946,10 +946,63 @@ def write_dataset_yaml(root: str) -> str:
 # analysis
 # --------------------------------------------------------------------------
 
-def analyse_dataset(root: str, splits: Sequence[str] = ("train", "val", "test")
-                    ) -> dict:
-    """Per-class instance/image counts and box-size distribution."""
-    inv = {v: k for k, v in tax.class_index().items()}
+def label_names(dataset_yaml: Optional[str]) -> Optional[list[str]]:
+    """Read the ordered label space a YOLO ``dataset.yaml`` declares.
+
+    A dataset's own yaml is the authoritative record of what its label indices
+    mean, and it is not always the taxonomy's. A profile-scoped dataset
+    (:func:`training.electrical.profiles.apply`) deliberately remaps its indices
+    to ``0..N-1``, so reading its labels through the 54-class taxonomy index
+    names every class after the first one wrong.
+    """
+    if not dataset_yaml or not os.path.exists(dataset_yaml):
+        return None
+    try:
+        import yaml
+
+        with open(dataset_yaml, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except Exception:
+        return None
+    names = data.get("names")
+    if isinstance(names, dict):
+        try:
+            return [str(names[k]) for k in sorted(names, key=lambda x: int(x))]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(names, list) and names:
+        return [str(n) for n in names]
+    return None
+
+
+def label_index(root: str, names: Optional[Sequence[str]] = None
+                 ) -> tuple[dict[int, str], str]:
+    """Index → class id map for a dataset root, and where the map came from.
+
+    Preference order is explicit names, then the dataset's own ``dataset.yaml``,
+    then the full taxonomy. The source is returned so the caller can report
+    which label space the numbers were computed in rather than leaving a reader
+    to assume.
+    """
+    if names:
+        return {i: str(n) for i, n in enumerate(names)}, "explicit"
+    declared = label_names(os.path.join(root, "dataset.yaml"))
+    if declared:
+        return {i: n for i, n in enumerate(declared)}, "dataset.yaml"
+    return {v: k for k, v in tax.class_index().items()}, "taxonomy"
+
+
+def analyse_dataset(root: str, splits: Sequence[str] = ("train", "val", "test"),
+                    names: Optional[Sequence[str]] = None) -> dict:
+    """Per-class instance/image counts and box-size distribution.
+
+    Label indices are interpreted in the dataset's **own** label space — see
+    :func:`label_index`. The result records which space that was, because the
+    same label file means different classes in a 54-class taxonomy dataset and
+    in an 8-class profile dataset, and a count attached to the wrong class name
+    is worse than no count at all.
+    """
+    inv, label_space = label_index(root, names)
     per_class: Counter = Counter()
     images_with: defaultdict[str, set] = defaultdict(set)
     sizes: defaultdict[str, list[float]] = defaultdict(list)
@@ -992,7 +1045,9 @@ def analyse_dataset(root: str, splits: Sequence[str] = ("train", "val", "test")
             "max_rel_area": round(max(areas), 6) if areas else None,
         })
     return {"root": root, "images": n_images, "images_per_split": per_split,
-            "instances": int(sum(per_class.values())), "per_class": rows}
+            "instances": int(sum(per_class.values())), "per_class": rows,
+            "label_space": label_space,
+            "label_space_size": len(inv)}
 
 
 #: Below this many instances a class will not train usefully; below the warn
@@ -1267,7 +1322,8 @@ def custom_collection_plan() -> dict:
 __all__ = [
     "DatasetSource", "SOURCES", "SOURCE_INDEX", "plan", "read_yolo_names",
     "build_index_map", "remap_yolo_dataset", "merge", "write_dataset_yaml",
-    "analyse_dataset", "coverage_report", "custom_collection_plan",
+    "analyse_dataset", "label_names", "label_index", "coverage_report",
+    "custom_collection_plan",
     "requirements_report", "PRIORITY_CLASSES", "INSTANCES_PER_IMAGE_ESTIMATE",
     "MIN_INSTANCES_TRAINABLE", "MIN_INSTANCES_RELIABLE", "IMAGE_EXTS",
 ]

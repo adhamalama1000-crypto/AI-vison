@@ -104,24 +104,9 @@ def classes_for_dataset(dataset_yaml: Optional[str]) -> Optional[list[str]]:
     caller should not have to hit the error to discover which label space to use. The
     dataset's own ``dataset.yaml`` is the authoritative record of it.
     """
-    if not dataset_yaml or not os.path.exists(dataset_yaml):
-        return None
-    try:
-        import yaml
+    from . import datasets as ds
 
-        with open(dataset_yaml, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except Exception:
-        return None
-    names = data.get("names")
-    if isinstance(names, dict):
-        try:
-            return [str(names[k]) for k in sorted(names, key=lambda x: int(x))]
-        except (TypeError, ValueError):
-            return None
-    if isinstance(names, list) and names:
-        return [str(n) for n in names]
-    return None
+    return ds.label_names(dataset_yaml)
 
 
 def collect_artifacts(run_dir: str, out_dir: str,
@@ -657,21 +642,62 @@ def verify_bundle(bundle_dir: str) -> dict:
         problems.append("labels.txt is missing")
 
     expected = list(classes or labels)
+    if expected:
+        # A label the taxonomy cannot resolve is the genuine failure: that index
+        # maps to nothing, and every detection on it is reported as unknown. The
+        # runtime resolves labels BY NAME through tax.resolve (see
+        # rtsp_backend.electrical.recognizer.resolve_names), never by position in
+        # CLASS_ORDER, so this — not the ordering — is what must hold.
+        unresolvable = [n for n in expected if tax.resolve(n) is None]
+        if unresolvable:
+            problems.append(
+                f"bundle labels are not resolvable taxonomy ids: "
+                f"{unresolvable[:5]}. The runtime maps labels by name, so every "
+                f"detection on those indices would come back as "
+                f"unknown_industrial_component. Re-export with --data pointing "
+                f"at the dataset.yaml the checkpoint was trained on.")
+        # Two indices claiming one class silently merges them.
+        duplicates = sorted({n for n in expected if expected.count(n) > 1})
+        if duplicates:
+            problems.append(
+                f"bundle declares the same class on more than one index: "
+                f"{duplicates[:5]}. The label space must be one-to-one.")
+
     if expected and list(expected) != list(tax.CLASS_ORDER):
-        # Not fatal — an older bundle legitimately has fewer classes because
-        # CLASS_ORDER is append-only — but it must be visible.
+        # Neither of the remaining cases is a fault, but both must be visible.
         if list(expected) == list(tax.CLASS_ORDER[:len(expected)]):
             info["taxonomy_note"] = (
                 f"bundle has {len(expected)} classes, the current taxonomy has "
                 f"{len(tax.CLASS_ORDER)}. The bundle is a valid prefix, so "
                 f"existing indices are correct and the newer classes simply "
                 f"cannot be detected by this checkpoint.")
-        else:
+        elif set(expected) == set(tax.CLASS_ORDER):
+            # The full taxonomy in a different order. Nothing legitimate produces
+            # that — every dataset builder here writes CLASS_ORDER order — so it
+            # is a permutation bug, and a permutation mislabels every detection.
             problems.append(
-                f"bundle label order does not match the taxonomy and is not a "
-                f"prefix of it. Indices would be misinterpreted at runtime. "
-                f"Bundle: {expected[:5]}... Taxonomy: "
+                f"bundle declares all {len(expected)} classes in an order that "
+                f"does not match the taxonomy, so every detection would be "
+                f"mislabelled. Bundle: {expected[:5]}... Taxonomy: "
                 f"{list(tax.CLASS_ORDER[:5])}...")
+        elif not [n for n in expected if tax.resolve(n) is None]:
+            # A profile-trained bundle carries a SUBSET of the taxonomy in the
+            # profile's own training order — which is the documented, supported
+            # path (see training.electrical.profiles). Calling that a mismatch
+            # made verify_bundle fail every profile bundle, and because
+            # install_bundle refuses anything that fails verification, the
+            # repository's own recommended way to train a first model produced
+            # something that could not be installed.
+            info["profile_bundle"] = True
+            shown = ", ".join(expected[:6])
+            info["taxonomy_note"] = (
+                f"bundle declares {len(expected)} of the taxonomy's "
+                f"{len(tax.CLASS_ORDER)} classes in its own training order "
+                f"({shown}{', …' if len(expected) > 6 else ''}). This is a "
+                f"profile-trained bundle: the runtime reads classes.json and "
+                f"resolves each label by name, so the order is correct provided "
+                f"it matches the dataset the checkpoint was trained on. The "
+                f"classes outside the profile simply cannot be detected.")
 
     onnx_path = os.path.join(bundle_dir, "best.onnx")
     if os.path.exists(onnx_path) and expected:

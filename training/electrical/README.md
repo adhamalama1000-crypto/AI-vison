@@ -335,6 +335,77 @@ or make it the default by editing `min_conf` in `taxonomy.py`. **Derive these
 numbers; do not leave them at the hand-set defaults once you have a validation
 set.**
 
+### 5.1 The production operating point
+
+`eval` and `tune` score the checkpoint. Neither answers the question a deployment
+actually turns on: *with the gate configured this way, what does the system
+return?* Between the model head and an API response sits the whole cascade in
+`postprocess.py` — per-class NMS, cross-class dedupe, the plausibility gate, the
+per-class thresholds, the demote-to-unknown rule, the detection cap. A flattering
+mAP can still ship badly.
+
+```bash
+# one operating point, through recognize() — the same call the runtime makes
+python -m training.electrical.cli prodeval --root data/core8 --backend industrial_onnx \
+  --decode-floor 0.05 --unknown-floor 0.18
+
+# the acceptance sweep: pick an operating point on measured production behaviour
+python -m training.electrical.cli sweep --root data/core8 --backend industrial_onnx \
+  --objective production_score --per-class --out dist/production_metrics.json
+```
+
+`prodeval` reports what an operator feels: **FP per image, FN per image, the
+unknown (abstention) rate, and accepted vs rejected detection counts**, alongside
+precision, recall, mAP@0.5 and mAP@0.5:0.95 — all computed on the gated output,
+never on raw head activations.
+
+Two reporting decisions are worth knowing before reading the numbers:
+
+- A box demoted to `unknown_industrial_component` is an **abstention, not a
+  misclassification**. Counting it as a false positive against a typed
+  ground-truth box would punish the honesty rule the brief asks for, so the
+  headline metrics cover *asserted* detections only and abstentions are reported
+  separately as `unknown_rate`.
+- That alone cannot tell "never saw the device" from "saw it, would not name it",
+  so every report also carries `recall_localised` — class-agnostic recall over
+  *all* accepted boxes. The gap (`classification_shortfall`) is the share of
+  misses that are classification failures rather than blindness. On an early
+  checkpoint it read recall 0.53 against localised recall 0.86: the model was
+  finding the devices and failing to name them, which points at class confusion
+  and not at the detector.
+
+#### Sweep the strictness, not just the floors
+
+The sweep grid is `decode_floor` × `unknown_floor` × **`strictness`**, and the
+third dimension is not optional padding. `confidence_gate` asserts a class when
+`score >= threshold_for(class)`; the taxonomy thresholds are ~0.38–0.40, and
+every floor in the default grid is ≤ 0.25. So **no combination of the two floors
+can change which boxes clear their class threshold** — the asserted set, and with
+it precision, recall and mAP, is invariant. Measured on a real checkpoint: 35
+floor-only points produced exactly *one* distinct (precision, recall, mAP@0.5)
+triple. The floors move only the abstention rate and the accept/reject counts.
+
+`strictness` is the global multiplier on every per-class threshold, so it is the
+knob that genuinely trades precision against recall. Adding it to the same grid
+turned 1 distinct operating point into 10, spanning recall 0.26–0.90 and
+precision 0.32–0.59.
+
+The sweep runs inference **once** at the lowest floor and replays the gate over
+the cached candidates. This is exact, not an approximation: `decode_floor` is a
+pure score cutoff inside `decode_yolo` with no top-k truncation, so the candidate
+set at floor *f* is precisely the subset of any lower floor's with `score >= f`,
+and everything else the sweep varies lives downstream of inference. 280 points
+over a 160-image split take about a minute instead of about an hour, and
+`production_report` refuses a floor below the one it cached so the saving can
+never quietly become a lie.
+
+`--per-class` derives per-class thresholds at the winning point and adopts them
+**only if they improve the objective through the production path**.
+`optimise_thresholds` maximises each class's F1 in isolation, which is not the
+same as improving the system — on an early checkpoint it proposed dropping five
+classes to 0.05, which flooded false positives and scored 0.31 → −0.01, so the
+defaults were correctly kept.
+
 ---
 
 ## 6. The improvement loop

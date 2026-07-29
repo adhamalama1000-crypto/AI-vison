@@ -51,6 +51,53 @@ def _labels(path: str, lines) -> None:
         fh.write("\n".join(lines) + ("\n" if lines else ""))
 
 
+def test_analyse_reads_indices_in_the_datasets_own_label_space(tmp_path):
+    """A profile-scoped dataset remaps its indices to 0..N-1. Interpreting those
+    through the 54-class taxonomy index names every class but the first wrong,
+    so analyse_dataset must prefer the dataset's own dataset.yaml."""
+    root = str(tmp_path / "scoped")
+    # Taxonomy index 0 is 'mcb'; index 1 is something else entirely. Declare a
+    # two-class space where index 1 is 'vfd' and check the count lands there.
+    _img(os.path.join(root, "images", "train", "a.jpg"))
+    _labels(os.path.join(root, "labels", "train", "a.txt"),
+            ["0 0.5 0.5 0.1 0.2", "1 0.3 0.3 0.1 0.2", "1 0.7 0.7 0.1 0.2"])
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write("path: .\ntrain: images/train\nval: images/train\n"
+                 "nc: 2\nnames:\n  0: mcb\n  1: vfd\n")
+
+    analysis = ds.analyse_dataset(root)
+    assert analysis["label_space"] == "dataset.yaml"
+    assert analysis["label_space_size"] == 2
+    counts = {r["class_id"]: r["instances"] for r in analysis["per_class"]}
+    assert counts == {"vfd": 2, "mcb": 1}
+
+
+def test_analyse_accepts_an_explicit_label_space(tmp_path):
+    root = str(tmp_path / "explicit")
+    _img(os.path.join(root, "images", "train", "a.jpg"))
+    _labels(os.path.join(root, "labels", "train", "a.txt"),
+            ["0 0.5 0.5 0.1 0.2", "1 0.3 0.3 0.1 0.2"])
+    analysis = ds.analyse_dataset(root, names=["contactor", "plc"])
+    assert analysis["label_space"] == "explicit"
+    counts = {r["class_id"]: r["instances"] for r in analysis["per_class"]}
+    assert counts == {"contactor": 1, "plc": 1}
+
+
+def test_label_names_reads_both_yaml_shapes_and_tolerates_junk(tmp_path):
+    as_dict = tmp_path / "d.yaml"
+    as_dict.write_text("nc: 2\nnames:\n  1: vfd\n  0: mcb\n", encoding="utf-8")
+    assert ds.label_names(str(as_dict)) == ["mcb", "vfd"]
+
+    as_list = tmp_path / "l.yaml"
+    as_list.write_text("nc: 2\nnames: [mcb, vfd]\n", encoding="utf-8")
+    assert ds.label_names(str(as_list)) == ["mcb", "vfd"]
+
+    assert ds.label_names(str(tmp_path / "missing.yaml")) is None
+    empty = tmp_path / "e.yaml"
+    empty.write_text("nc: 0\n", encoding="utf-8")
+    assert ds.label_names(str(empty)) is None
+
+
 def make_roboflow_export(root: str, names=("contactor", "mcb", "gizmo"),
                          per_split=(4, 2, 2)) -> str:
     """A directory shaped exactly like a Roboflow YOLO export.
@@ -490,6 +537,43 @@ def test_verify_bundle_accepts_an_older_prefix_bundle(tmp_path):
     assert "taxonomy_note" in info
 
 
+def test_verify_bundle_accepts_a_profile_bundle(tmp_path):
+    """A profile-trained bundle carries a SUBSET of the taxonomy in its own
+    training order. That is the documented path (profiles.apply remaps indices to
+    0..N-1) and the runtime resolves labels by name from classes.json, so the
+    order relative to CLASS_ORDER never enters into it. Flagging it as a mismatch
+    made install_bundle refuse every profile-trained model."""
+    core8 = ["mcb", "mccb", "contactor", "relay", "plc", "terminal_block",
+             "power_supply", "vfd"]
+    assert core8 != list(tax.CLASS_ORDER[:len(core8)])   # genuinely not a prefix
+    ex.write_classes_json(str(tmp_path), core8)
+    ex.write_labels(str(tmp_path), core8)
+    info = ex.verify_bundle(str(tmp_path))
+    assert info["problems"] == []
+    assert info["profile_bundle"] is True
+    assert "profile-trained bundle" in info["taxonomy_note"]
+
+
+def test_verify_bundle_rejects_labels_the_taxonomy_cannot_resolve(tmp_path):
+    """An unresolvable label maps to nothing: the runtime reports every detection
+    on that index as unknown_industrial_component."""
+    labels = ["mcb", "not_a_real_device", "contactor"]
+    ex.write_classes_json(str(tmp_path), labels)
+    ex.write_labels(str(tmp_path), labels)
+    info = ex.verify_bundle(str(tmp_path))
+    assert not info["ok"]
+    assert any("not resolvable taxonomy ids" in p for p in info["problems"])
+
+
+def test_verify_bundle_rejects_a_duplicated_class(tmp_path):
+    labels = ["mcb", "contactor", "mcb"]
+    ex.write_classes_json(str(tmp_path), labels)
+    ex.write_labels(str(tmp_path), labels)
+    info = ex.verify_bundle(str(tmp_path))
+    assert not info["ok"]
+    assert any("more than one index" in p for p in info["problems"])
+
+
 def test_verify_bundle_requires_the_label_files(tmp_path):
     info = ex.verify_bundle(str(tmp_path))
     assert not info["ok"]
@@ -763,6 +847,11 @@ def test_normalise_remap_split_and_report_run_end_to_end(tmp_path):
 
     analysis = ds.analyse_dataset(final)
     assert analysis["instances"] == stats["instances_kept"]
+    # The splitter writes a full-taxonomy dataset.yaml, so that is the label
+    # space the counts were computed in — and it agrees with the taxonomy here,
+    # which is why instances still matches instances_kept above.
+    assert analysis["label_space"] == "dataset.yaml"
+    assert analysis["label_space_size"] == len(tax.CLASS_ORDER)
 
     gap = ds.requirements_report(analysis, priority_only=True)
     # A 20-image dataset must be reported as nowhere near production-ready.

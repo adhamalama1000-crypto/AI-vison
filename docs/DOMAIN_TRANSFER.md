@@ -124,9 +124,24 @@ checked, not assumed:
 | Route | State |
 |---|---|
 | Roboflow MCP | `token expired` — needs interactive re-authorization, unavailable in a non-interactive session |
-| Roboflow REST API | no `ROBOFLOW_API_KEY` in the environment or `.env`; `api.roboflow.com` and `universe.roboflow.com` are both unreachable through the proxy (curl returns `000`) |
-| Kaggle | no `~/.kaggle/kaggle.json` token |
+| Roboflow REST API | no `ROBOFLOW_API_KEY` in the environment or `.env`; `api.roboflow.com`, `app.roboflow.com` and `universe.roboflow.com` are all unreachable through the proxy (curl returns `000`) |
+| Kaggle | no `~/.kaggle/kaggle.json` token, and `www.kaggle.com` is unreachable (`000`) |
+| Hugging Face | `huggingface.co` unreachable (`000`) |
+| COCO | `images.cocodataset.org` unreachable (`000`) |
 | Open Images (FiftyOne) | `storage.googleapis.com` is reachable, but Open Images has no electrical-panel component classes |
+
+Re-verified on a fresh container (2026-07-29) with the same result. The
+environment's network policy permits `pypi.org`, `files.pythonhosted.org`, the npm
+/ crates / Go module proxies, and `github.com` — which is why Ultralytics *can*
+fetch pretrained COCO weights while no dataset host is reachable. For the record,
+`download.pytorch.org` is also denied (proxy answers `403` to `CONNECT`), so a
+CPU-only torch install has to come from PyPI.
+
+**This means arms B and C of the three-way comparison below cannot be run here at
+all.** Only arm A (synthetic-only) is executable. No substitute was used and no
+number for B or C is reported anywhere in this repository: treating a
+synthetic-only result as if it spoke for real-world accuracy is the exact error
+this document exists to prevent.
 
 **To unblock, one of these is needed:**
 

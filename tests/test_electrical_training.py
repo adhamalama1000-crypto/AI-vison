@@ -535,6 +535,44 @@ def test_load_ground_truth_reads_absolute_pixel_boxes(tmp_path):
         assert g["class_id"] in tax.SPECS
 
 
+def test_load_ground_truth_uses_the_datasets_own_label_space(tmp_path):
+    """A core8-style dataset remaps indices to 0..N-1. Reading them through the
+    54-class taxonomy labels contactor/relay boxes as rccb/fuse, and every metric
+    computed against that ground truth is meaningless."""
+    root = str(tmp_path / "scoped")
+    os.makedirs(os.path.join(root, "images", "val"), exist_ok=True)
+    os.makedirs(os.path.join(root, "labels", "val"), exist_ok=True)
+    cv2.imwrite(os.path.join(root, "images", "val", "a.jpg"),
+                np.full((200, 200, 3), 90, np.uint8))
+    with open(os.path.join(root, "labels", "val", "a.txt"), "w",
+              encoding="utf-8") as fh:
+        fh.write("2 0.5 0.5 0.2 0.2\n3 0.25 0.25 0.1 0.1\n")
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write("path: .\ntrain: images/val\nval: images/val\nnc: 8\nnames:\n")
+        for i, n in enumerate(("mcb", "mccb", "contactor", "relay", "plc",
+                               "terminal_block", "power_supply", "vfd")):
+            fh.write(f"  {i}: {n}\n")
+
+    gts = tr.load_ground_truth(root, "val")
+    assert {g["class_id"] for g in gts} == {"contactor", "relay"}
+
+    # An explicit label space overrides the yaml.
+    gts = tr.load_ground_truth(root, "val", names=["a", "b", "plc", "vfd"])
+    assert {g["class_id"] for g in gts} == {"plc", "vfd"}
+
+
+def test_evaluated_image_ids_mirrors_the_prediction_limit(tmp_path):
+    img_dir = str(tmp_path / "images")
+    os.makedirs(img_dir, exist_ok=True)
+    for name in ("c.jpg", "a.jpg", "b.png", "notes.txt"):
+        with open(os.path.join(img_dir, name), "w", encoding="utf-8") as fh:
+            fh.write("x")
+    assert tr.evaluated_image_ids(img_dir) == {"a", "b", "c"}
+    # sorted order, so a limit takes the same prefix collect_predictions does
+    assert tr.evaluated_image_ids(img_dir, limit=2) == {"a", "b"}
+    assert tr.evaluated_image_ids(str(tmp_path / "missing")) == set()
+
+
 def test_evaluate_backend_skips_cleanly_without_ground_truth(tmp_path):
     rep = tr.evaluate_backend("industrial_onnx", str(tmp_path))
     assert rep["status"] == "skipped"
