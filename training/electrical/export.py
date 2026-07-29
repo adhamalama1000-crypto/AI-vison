@@ -104,24 +104,9 @@ def classes_for_dataset(dataset_yaml: Optional[str]) -> Optional[list[str]]:
     caller should not have to hit the error to discover which label space to use. The
     dataset's own ``dataset.yaml`` is the authoritative record of it.
     """
-    if not dataset_yaml or not os.path.exists(dataset_yaml):
-        return None
-    try:
-        import yaml
+    from . import datasets as ds
 
-        with open(dataset_yaml, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except Exception:
-        return None
-    names = data.get("names")
-    if isinstance(names, dict):
-        try:
-            return [str(names[k]) for k in sorted(names, key=lambda x: int(x))]
-        except (TypeError, ValueError):
-            return None
-    if isinstance(names, list) and names:
-        return [str(n) for n in names]
-    return None
+    return ds.label_names(dataset_yaml)
 
 
 def collect_artifacts(run_dir: str, out_dir: str,
