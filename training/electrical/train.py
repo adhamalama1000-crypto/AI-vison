@@ -178,6 +178,17 @@ class TrainConfig:
     project: str = "runs/electrical"
     name: Optional[str] = None
     pretrained: bool = True
+    #: Fine-tune from this checkpoint instead of the architecture's COCO weights.
+    #: Used for synthetic → real domain transfer and for staged class expansion.
+    #: When the checkpoint's head has a different class count from ``data``,
+    #: Ultralytics keeps the backbone and reinitialises the head — which is the
+    #: intended behaviour for expanding a profile, and is reported as such.
+    init_from: Optional[str] = None
+    #: Freeze the first N layers. Standard staged transfer learning: freeze the
+    #: backbone while the head adapts to the new domain, then unfreeze and train
+    #: end to end at a lower learning rate. 10 freezes the YOLO backbone; 0 is
+    #: full fine-tuning.
+    freeze: Optional[int] = None
     optimizer: str = "auto"
     lr0: float = 0.01
     cos_lr: bool = True
@@ -212,6 +223,7 @@ class TrainConfig:
             "project": os.path.abspath(self.project),
             "name": self.name or self.arch,
             "pretrained": self.pretrained, "optimizer": self.optimizer,
+            **({"freeze": self.freeze} if self.freeze is not None else {}),
             "lr0": self.lr0, "cos_lr": self.cos_lr,
             "warmup_epochs": self.warmup_epochs,
             "degrees": self.degrees, "translate": self.translate,
@@ -279,7 +291,15 @@ def train(cfg: TrainConfig, export_onnx: bool = True,
     try:
         from ultralytics import RTDETR, YOLO  # type: ignore
         Model = RTDETR if cfg.arch.startswith("rtdetr") else YOLO
-        stem = f"{cfg.arch}.pt" if cfg.pretrained else f"{cfg.arch}.yaml"
+        if cfg.init_from:
+            if not os.path.exists(cfg.init_from):
+                return TrainResult(
+                    cfg.arch, "skipped",
+                    f"init_from checkpoint not found: {cfg.init_from}")
+            stem = cfg.init_from
+            say(f"[{cfg.arch}] fine-tuning from {cfg.init_from}")
+        else:
+            stem = f"{cfg.arch}.pt" if cfg.pretrained else f"{cfg.arch}.yaml"
         say(f"[{cfg.arch}] loading {stem}")
         with quiet_stdout():
             model = Model(stem)

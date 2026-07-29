@@ -65,6 +65,7 @@ from training.electrical import refine as rf  # noqa: E402
 from training.electrical import split as splitter  # noqa: E402
 from training.electrical import synthetic as syn  # noqa: E402
 from training.electrical import train as tr  # noqa: E402
+from training.electrical import transfer as xf  # noqa: E402
 
 
 def _dump(obj) -> None:
@@ -625,6 +626,119 @@ def cmd_tune(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# synthetic -> real domain transfer
+#
+# Four subcommands, named `mix` / `gap` is taken / `finetune` / `transfer`. The
+# function names are prefixed cmd_xf_* rather than reusing cmd_transfer-style names,
+# because a duplicate `def cmd_x` later in this module silently shadows the earlier one
+# and the failure surfaces as a missing argparse attribute, not as an import error.
+# --------------------------------------------------------------------------
+
+def cmd_xf_mix(args) -> int:
+    """Build a real+synthetic training set with a REAL-ONLY validation split."""
+    try:
+        rep = xf.build_mixed(args.real, args.synth, args.dst,
+                             synth_fraction=args.synth_fraction,
+                             seed=args.seed, symlink=not args.copy,
+                             log=_stderr)
+    except ValueError as exc:
+        _stderr(f"failed: {exc}")
+        _dump({"status": "failed", "reason": str(exc)})
+        return 1
+    rep["status"] = "built"
+    _dump(rep)
+    return 0
+
+
+def cmd_xf_domaingap(args) -> int:
+    """Score one checkpoint on synthetic and on real data, and name the gap."""
+    rep = xf.measure_domain_gap(args.weights, args.synth, args.real,
+                                split=args.split, imgsz=args.imgsz,
+                                device=args.device, log=_stderr)
+    if args.out:
+        _stderr(f"wrote {xf.write_result(rep, args.out)}")
+    _dump(rep)
+    return 0 if rep.get("real", {}).get("status") == "evaluated" else 1
+
+
+def cmd_xf_finetune(args) -> int:
+    """Fine-tune a checkpoint onto a new domain, optionally in two stages."""
+    rep = xf.fine_tune(args.data, args.init_from, arch=args.arch,
+                       epochs=args.epochs, imgsz=args.imgsz, batch=args.batch,
+                       device=args.device, staged=not args.no_staged,
+                       freeze_layers=args.freeze,
+                       stage1_epochs=args.stage1_epochs,
+                       lr0=args.lr0, name=args.name, log=_stderr)
+    if args.out:
+        _stderr(f"wrote {xf.write_result(rep, args.out)}")
+    _dump(rep)
+    return 0 if rep.get("status") == "completed" else 1
+
+
+def cmd_xf_compare(args) -> int:
+    """Train every transfer strategy and rank them on REAL validation data."""
+    rep = xf.compare_strategies(
+        args.real, args.synth, args.work_dir, strategies=tuple(args.strategies),
+        arch=args.arch, epochs=args.epochs,
+        synth_pretrain_epochs=args.synth_pretrain_epochs,
+        imgsz=args.imgsz, batch=args.batch, device=args.device,
+        synth_fraction=args.synth_fraction, synth_weights=args.synth_weights,
+        log=_stderr)
+    # Table to stderr, JSON to stdout, so `> comparison.json` stays parseable.
+    _stderr(xf.format_ranking(rep))
+    if rep.get("rationale"):
+        _stderr("\n" + rep["rationale"])
+    if args.out:
+        _stderr(f"\nwrote {xf.write_result(rep, args.out)}")
+    _dump(rep)
+    return 0 if rep.get("status") == "completed" else 1
+
+
+def cmd_xf_expand(args) -> int:
+    """Describe (or run) a staged class expansion, e.g. core8 -> core15."""
+    from training.electrical import profiles as pf
+
+    try:
+        plan = pf.expansion_plan(args.frm, args.to)
+    except KeyError as exc:
+        _stderr(str(exc))
+        return 1
+
+    _stderr(f"{args.frm} -> {args.to}: "
+            f"{plan['from_classes']} -> {plan['to_classes']} classes")
+    if plan["added"]:
+        _stderr(f"  adds: {', '.join(plan['added'])}")
+    if plan["removed"]:
+        _stderr(f"  drops: {', '.join(plan['removed'])}")
+    _stderr(f"  {plan['guidance']}")
+
+    if not args.data:
+        _dump(plan)
+        return 0
+
+    if not plan["index_stable"] and args.init_from:
+        # Refusing rather than warning. Carrying a checkpoint across a non-prefix
+        # profile change produces a model that loads without complaint and predicts
+        # the wrong labels — the failure would surface as bad inspection reports.
+        _stderr("refusing to fine-tune across a non-prefix profile change; "
+                "drop --init-from to train a fresh head instead")
+        plan["status"] = "refused"
+        _dump(plan)
+        return 1
+
+    rep = xf.fine_tune(args.data, args.init_from, arch=args.arch,
+                       epochs=args.epochs, imgsz=args.imgsz, batch=args.batch,
+                       device=args.device, staged=not args.no_staged,
+                       name=f"expand_{args.frm}_to_{args.to}", log=_stderr)
+    plan["training"] = rep
+    plan["status"] = rep.get("status")
+    if args.out:
+        _stderr(f"wrote {xf.write_result(plan, args.out)}")
+    _dump(plan)
+    return 0 if rep.get("status") == "completed" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="training.electrical.cli",
@@ -963,6 +1077,101 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--objective", default="f1", choices=["f1", "precision", "recall"])
     sp.add_argument("--min-precision", type=float, default=0.0)
     sp.set_defaults(func=cmd_tune)
+
+    # ---- synthetic -> real domain transfer ----
+    sp = sub.add_parser(
+        "mix", help="build a real+synthetic train split with REAL-ONLY validation")
+    sp.add_argument("--real", required=True,
+                    help="root of the real dataset (authoritative label space)")
+    sp.add_argument("--synth", required=True, help="root of the synthetic dataset")
+    sp.add_argument("--dst", required=True)
+    sp.add_argument("--synth-fraction", type=float,
+                    default=xf.DEFAULT_SYNTH_FRACTION,
+                    help="share of the TRAIN split allowed to be synthetic "
+                         f"(default {xf.DEFAULT_SYNTH_FRACTION}); val/test are real "
+                         "only regardless")
+    sp.add_argument("--seed", type=int, default=1234)
+    sp.add_argument("--copy", action="store_true",
+                    help="copy images instead of symlinking")
+    sp.set_defaults(func=cmd_xf_mix)
+
+    sp = sub.add_parser(
+        "domain-gap",
+        help="score a checkpoint on synthetic vs real data and name the gap")
+    sp.add_argument("--weights", required=True)
+    sp.add_argument("--synth", required=True)
+    sp.add_argument("--real", required=True)
+    sp.add_argument("--split", default="val")
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--out", help="also write the report to this path")
+    sp.set_defaults(func=cmd_xf_domaingap)
+
+    sp = sub.add_parser("finetune",
+                        help="fine-tune a checkpoint onto a new domain (staged)")
+    sp.add_argument("--data", required=True, help="dataset.yaml (real-validated)")
+    sp.add_argument("--init-from",
+                    help="checkpoint to start from; omit for COCO pretrained")
+    sp.add_argument("--arch", default="yolo11s")
+    sp.add_argument("--epochs", type=int, default=60)
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--batch", type=int, default=16)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--no-staged", action="store_true",
+                    help="train end-to-end instead of freeze-then-unfreeze")
+    sp.add_argument("--freeze", type=int, default=xf.BACKBONE_FREEZE_LAYERS,
+                    help="backbone layers to freeze in stage 1 "
+                         f"(default {xf.BACKBONE_FREEZE_LAYERS})")
+    sp.add_argument("--stage1-epochs", type=int,
+                    help="default is a third of --epochs")
+    sp.add_argument("--lr0", type=float, default=0.002,
+                    help="fine-tuning learning rate; stage 2 uses half of it")
+    sp.add_argument("--name", default="finetune")
+    sp.add_argument("--out", help="also write the report to this path")
+    sp.set_defaults(func=cmd_xf_finetune)
+
+    sp = sub.add_parser(
+        "transfer",
+        help="train every transfer strategy and rank them on REAL validation")
+    sp.add_argument("--real", required=True)
+    sp.add_argument("--synth", required=True)
+    sp.add_argument("--work-dir", default="runs/electrical/transfer")
+    sp.add_argument("--strategies", nargs="+",
+                    default=["real_only", "coco_to_synth_to_real", "mixed"],
+                    choices=sorted(xf.STRATEGIES))
+    sp.add_argument("--arch", default="yolo11s")
+    sp.add_argument("--epochs", type=int, default=40)
+    sp.add_argument("--synth-pretrain-epochs", type=int, default=20)
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--batch", type=int, default=16)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--synth-fraction", type=float,
+                    default=xf.DEFAULT_SYNTH_FRACTION)
+    sp.add_argument("--synth-weights",
+                    help="reuse an existing synthetic checkpoint instead of "
+                         "pretraining one for coco_to_synth_to_real")
+    sp.add_argument("--out", help="also write the comparison to this path")
+    sp.set_defaults(func=cmd_xf_compare)
+
+    sp = sub.add_parser(
+        "expand",
+        help="plan (or run) a staged class expansion, e.g. core8 -> core15")
+    sp.add_argument("--from", dest="frm", default="core8")
+    sp.add_argument("--to", default="core15")
+    sp.add_argument("--data",
+                    help="dataset.yaml scoped to the TARGET profile; omit to only "
+                         "print the plan")
+    sp.add_argument("--init-from",
+                    help="checkpoint from the source profile; refused when the "
+                         "expansion is not index-stable")
+    sp.add_argument("--arch", default="yolo11s")
+    sp.add_argument("--epochs", type=int, default=60)
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--batch", type=int, default=16)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--no-staged", action="store_true")
+    sp.add_argument("--out")
+    sp.set_defaults(func=cmd_xf_expand)
     return p
 
 

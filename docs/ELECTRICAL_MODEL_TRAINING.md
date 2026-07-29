@@ -258,10 +258,16 @@ python -m training.electrical.cli scope --list --name core15   # the 15 priority
 python -m training.electrical.cli scope --name core15 --src data/final --dst data/core15
 ```
 
-Three profiles ship: `core15` (the priority class list), `core18` (adds
-`overload_relay`, `din_rail`, `circuit_breaker` — appended, so a `core15` checkpoint
-fine-tunes onto it), and `full` (all 54, the eventual target rather than a starting
-point).
+Four profiles ship: `core8` (the staged-training baseline, and the profile the recipe was
+validated on), `core15` (the priority class list, extending core8 rather than reordering
+it), `core18` (adds `overload_relay`, `din_rail`, `circuit_breaker`), and `full` (all 54,
+the eventual target rather than a starting point).
+
+`core8 → core15 → core18` is a prefix chain: each is a strict positional prefix of the
+next, so a checkpoint fine-tunes forward with its existing head indices intact. Use
+`cli expand --from core8 --to core15` to plan or run a step; it refuses to carry a
+checkpoint across a change that is not index-stable. See
+[DOMAIN_TRANSFER.md](DOMAIN_TRANSFER.md).
 
 `scope` filters the dataset **and remaps every index to 0..N-1**. That remapping is the
 part that must not be skipped: a dataset filtered to 15 classes but still carrying

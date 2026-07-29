@@ -65,6 +65,93 @@ def test_core18_is_an_append_only_superset_of_core15():
     assert pf.CORE18.class_count == 18
 
 
+def test_core8_is_the_trained_baseline_order():
+    """The exact label order the core8 checkpoint was trained against.
+
+    If this changes, every core8 checkpoint starts predicting the wrong labels while
+    still loading cleanly, which is the worst possible failure mode. The order is
+    pinned here on purpose.
+    """
+    assert pf.CORE8.classes == (
+        "mcb", "mccb", "contactor", "relay", "plc", "terminal_block",
+        "power_supply", "vfd")
+
+
+class TestExpansionChainIsIndexStable:
+    """The property that makes staged expansion a fine-tune rather than a retrain.
+
+    A detection head is positional. Each profile in the path must be a strict prefix of
+    the next, or a checkpoint carried forward keeps its head weights and silently
+    attaches them to different classes.
+    """
+
+    def test_the_documented_path_is_a_prefix_chain(self):
+        for a, b in zip(pf.EXPANSION_PATH, pf.EXPANSION_PATH[1:]):
+            assert pf.is_prefix_of(pf.get(a), pf.get(b)), \
+                f"{a} is not a positional prefix of {b}"
+
+    def test_core8_is_a_prefix_of_core15(self):
+        assert pf.CORE15.classes[:8] == pf.CORE8.classes
+
+    def test_full_is_not_in_the_chain_because_it_is_not_a_prefix(self):
+        # full follows taxonomy order, which does not begin with the core8 classes.
+        # Claiming otherwise would invite reusing a head that cannot be reused.
+        assert not pf.is_prefix_of(pf.CORE8, pf.FULL)
+        assert "full" not in pf.EXPANSION_PATH
+
+    def test_a_reordered_profile_is_not_a_prefix(self):
+        shuffled = pf.ClassProfile(
+            name="shuffled", classes=("mccb", "mcb") + pf.CORE8.classes[2:])
+        assert not pf.is_prefix_of(shuffled, pf.CORE15)
+
+    def test_next_profile_walks_the_path_and_stops(self):
+        assert pf.next_profile("core8") == "core15"
+        assert pf.next_profile("core15") == "core18"
+        assert pf.next_profile("core18") is None
+        assert pf.next_profile("full") is None
+        assert pf.next_profile("nonexistent") is None
+
+
+class TestExpansionPlan:
+    def test_it_names_the_added_classes_and_their_new_indices(self):
+        plan = pf.expansion_plan("core8", "core15")
+        assert plan["index_stable"] is True
+        assert plan["added"][0] == "fuse"
+        assert len(plan["added"]) == 7
+        assert plan["removed"] == []
+        assert plan["new_indices"] == [8, 9, 10, 11, 12, 13, 14]
+
+    def test_a_stable_step_recommends_fine_tuning(self):
+        plan = pf.expansion_plan("core8", "core15")
+        assert "fine-tunes onto" in plan["guidance"]
+        assert "cli finetune" in plan["guidance"]
+
+    def test_an_unstable_step_says_it_is_a_fresh_run_not_a_finetune(self):
+        plan = pf.expansion_plan("core8", "full")
+        assert plan["index_stable"] is False
+        assert plan["new_indices"] is None
+        assert "fresh training run" in plan["guidance"]
+        assert "predicts the wrong labels" in plan["guidance"]
+
+    def test_shrinking_reports_the_dropped_classes(self):
+        plan = pf.expansion_plan("core15", "core8")
+        assert plan["index_stable"] is False
+        assert set(plan["removed"]) == set(pf.CORE15.classes) - set(pf.CORE8.classes)
+        assert "it drops" in plan["guidance"]
+
+    def test_it_states_the_data_needed_for_the_new_classes(self):
+        plan = pf.expansion_plan("core8", "core15")
+        need = plan["data_needed_for_new_classes"]
+        assert need["per_class_instances"]
+        assert "thin data lowers mAP" in need["note"]
+
+    def test_a_no_op_step_adds_nothing(self):
+        plan = pf.expansion_plan("core8", "core8")
+        assert plan["added"] == [] and plan["removed"] == []
+        assert plan["index_stable"] is True
+        assert "data_needed_for_new_classes" not in plan
+
+
 def test_full_is_the_whole_taxonomy():
     assert pf.FULL.classes == tuple(tax.CLASS_ORDER)
 
@@ -97,7 +184,8 @@ def test_get_and_list():
         pf.get("nope")
     listing = pf.list_profiles()
     assert listing["default"] == "core15"
-    assert {p["name"] for p in listing["profiles"]} == {"core15", "core18", "full"}
+    assert {p["name"] for p in listing["profiles"]} == {
+        "core8", "core15", "core18", "full"}
     assert "inference vocabulary" in listing["note"]
 
 
@@ -112,9 +200,9 @@ def test_taxonomy_to_profile_maps_onto_a_dense_zero_based_space():
     # mcb is taxonomy index 0 and profile index 0; mccb is taxonomy 1, profile 1.
     assert remap[canon["mcb"]] == 0
     assert remap[canon["mccb"]] == 1
-    # vfd is taxonomy index 26 but profile index 9 — the whole point.
+    # vfd is taxonomy index 26 but profile index 7 — the whole point.
     assert canon["vfd"] == 26
-    assert remap[canon["vfd"]] == 9
+    assert remap[canon["vfd"]] == 7
 
 
 def test_index_of_is_the_inverse_ordering():
@@ -158,9 +246,9 @@ def test_apply_rewrites_indices_into_the_profile_space(tmp_path):
     for line in open(os.path.join(dst, "labels", "train", "p0.txt"),
                      encoding="utf-8"):
         seen.add(int(line.split()[0]))
-    # Must be profile indices (0 and 9), NOT taxonomy indices (0 and 26).
-    assert seen == {profile_idx["mcb"], profile_idx["vfd"]} == {0, 9}
-    assert canon["vfd"] not in seen or canon["vfd"] == 9
+    # Must be profile indices (0 and 7), NOT taxonomy indices (0 and 26).
+    assert seen == {profile_idx["mcb"], profile_idx["vfd"]} == {0, 7}
+    assert canon["vfd"] not in seen or canon["vfd"] == 7
 
 
 def test_every_written_index_is_inside_the_profile_head(tmp_path):
@@ -220,7 +308,7 @@ def test_apply_writes_a_profile_dataset_yaml(tmp_path):
     text = open(os.path.join(dst, "dataset.yaml"), encoding="utf-8").read()
     assert f"nc: {pf.CORE15.class_count}" in text
     assert "0: mcb" in text
-    assert "9: vfd" in text
+    assert "7: vfd" in text
     # The warning that these are not taxonomy indices must be in the file itself.
     assert "NOT taxonomy indices" in text
 
@@ -289,7 +377,7 @@ def test_present_classes_honours_a_minimum(tmp_path):
 
 def test_derive_keeps_the_parent_ordering(tmp_path):
     derived = pf.derive(pf.CORE15, ["vfd", "mcb", "plc"])
-    # Parent order is mcb(0) ... plc(4) ... vfd(9), so the subsequence must be
+    # Parent order is mcb(0) ... plc(4) ... vfd(7), so the subsequence must be
     # mcb, plc, vfd — not the order they were passed in.
     assert derived.classes == ("mcb", "plc", "vfd")
     assert derived.name == "core15_present"

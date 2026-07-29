@@ -37,23 +37,34 @@ each is a model that works. The `core15` profile implements exactly the requeste
 python -m training.electrical.cli scope --list --name core15
 ```
 
-| # | Class | Taxonomy id |
-|---|---|---|
-| 0 | MCB | `mcb` |
-| 1 | MCCB | `mccb` |
-| 2 | Contactor | `contactor` |
-| 3 | Relay | `relay` |
-| 4 | PLC | `plc` |
-| 5 | Terminal block | `terminal_block` |
-| 6 | Fuse | `fuse` |
-| 7 | Power supply | `power_supply` |
-| 8 | Transformer | `transformer` |
-| 9 | VFD | `vfd` |
-| 10 | Busbar | `busbar` |
-| 11 | Cable duct | `wire_duct` |
-| 12 | Emergency stop | `emergency_stop` |
-| 13 | Switch | `selector_switch` |
-| 14 | Indicator lamp | `indicator_lamp` |
+The first eight entries are the `core8` profile — the staged-training baseline — and
+`core15` extends it rather than reordering it, so a core8 checkpoint fine-tunes onto
+core15 with indices 0–7 keeping their meaning.
+
+| # | Class | Taxonomy id | In `core8` |
+|---|---|---|---|
+| 0 | MCB | `mcb` | ✅ |
+| 1 | MCCB | `mccb` | ✅ |
+| 2 | Contactor | `contactor` | ✅ |
+| 3 | Relay | `relay` | ✅ |
+| 4 | PLC | `plc` | ✅ |
+| 5 | Terminal block | `terminal_block` | ✅ |
+| 6 | Power supply | `power_supply` | ✅ |
+| 7 | VFD | `vfd` | ✅ |
+| 8 | Fuse | `fuse` | |
+| 9 | Transformer | `transformer` | |
+| 10 | Busbar | `busbar` | |
+| 11 | Cable duct | `wire_duct` | |
+| 12 | Emergency stop | `emergency_stop` | |
+| 13 | Switch | `selector_switch` | |
+| 14 | Indicator lamp | `indicator_lamp` | |
+
+`core8` departs from the brief's stated priority order in one slot: `mccb` is in the
+baseline and `fuse` is not. That is a data-availability decision — MCCBs are well
+represented in the public switchgear sets, while fuses are mostly photographed as loose
+parts rather than mounted in panels. `fuse` is the first class `core15` adds.
+
+See [DOMAIN_TRANSFER.md](DOMAIN_TRANSFER.md) for the staged expansion workflow.
 
 **"Switch" was read as `selector_switch`** — the taxonomy distinguishes selector,
 changeover and Ethernet switches, and the brief lists it beside emergency stop and
