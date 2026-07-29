@@ -240,6 +240,28 @@ def replay_gate(cache: CandidateCache, decode_floor: float,
     }
 
 
+def operating_point(gts: Sequence[Mapping], cache: CandidateCache,
+                    decode_floor: float, unknown_floor: float,
+                    thresholds: Optional[Mapping[str, float]] = None,
+                    strictness: float = 1.0,
+                    check_plausibility: bool = True) -> tuple[list, list, dict]:
+    """Aligned ground truth, asserted detections, and the gate accounting.
+
+    Shared by :func:`production_report` and the gallery writer so that what a
+    gallery displays is exactly what the reported metrics counted, rather than a
+    second derivation that can drift from it.
+    """
+    if decode_floor < cache.base_decode_floor - 1e-9:
+        raise ValueError(
+            f"decode_floor {decode_floor} is below the {cache.base_decode_floor} "
+            "floor inference was cached at; re-cache before evaluating it")
+    ids = {i.image_id for i in cache.images}
+    aligned = [g for g in gts if g.get("image_id") in ids]
+    cfg = gate_config(unknown_floor, thresholds, strictness, check_plausibility)
+    gated = replay_gate(cache, decode_floor, cfg)
+    return aligned, gated["asserted"], gated
+
+
 def production_report(gts: Sequence[Mapping], cache: CandidateCache,
                       decode_floor: float, unknown_floor: float,
                       thresholds: Optional[Mapping[str, float]] = None,
@@ -253,23 +275,17 @@ def production_report(gts: Sequence[Mapping], cache: CandidateCache,
     the expensive part; the sweep uses it for the grid and then recomputes the
     winner in full.
     """
-    if decode_floor < cache.base_decode_floor - 1e-9:
-        raise ValueError(
-            f"decode_floor {decode_floor} is below the {cache.base_decode_floor} "
-            "floor inference was cached at; re-cache before evaluating it")
-
-    # Align the ground truth to the images actually inferred. With --limit,
+    # The ground truth is aligned to the images actually inferred. With --limit,
     # predictions cover a subset while load_ground_truth reads the whole split;
     # scoring the two against each other turns every unevaluated image's boxes
     # into false negatives and reports a recall that has nothing to do with the
-    # model. Filtering here rather than in the caller means no caller can forget.
-    ids = {i.image_id for i in cache.images}
+    # model. Aligning inside here rather than in the caller means no caller can
+    # forget to do it.
     gt_all = len(gts)
-    gts = [g for g in gts if g.get("image_id") in ids]
-
-    cfg = gate_config(unknown_floor, thresholds, strictness, check_plausibility)
-    gated = replay_gate(cache, decode_floor, cfg)
-    asserted, unknown = gated["asserted"], gated["unknown"]
+    gts, asserted, gated = operating_point(
+        gts, cache, decode_floor, unknown_floor, thresholds, strictness,
+        check_plausibility)
+    unknown = gated["unknown"]
     images = max(1, cache.image_count)
 
     ious = em.COCO_IOUS if full else (iou_thr,)

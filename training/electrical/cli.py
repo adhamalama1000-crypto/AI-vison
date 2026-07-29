@@ -658,8 +658,24 @@ def cmd_prodeval(args) -> int:
                                thresholds=thresholds, strictness=args.strictness,
                                iou_thr=args.iou)
     _stderr("\n" + pe.format_production(rep["production"]))
+    if args.gallery:
+        rep["galleries"] = _write_galleries(
+            args, gts, cache, args.decode_floor, args.unknown_floor,
+            thresholds, args.strictness)
     _dump(rep)
     return 0
+
+
+def _write_galleries(args, gts, cache, decode_floor, unknown_floor,
+                     thresholds, strictness) -> dict:
+    """Render the FP/FN galleries for one operating point."""
+    from training.electrical import gallery as gy
+
+    aligned, asserted, _ = pe.operating_point(
+        gts, cache, decode_floor, unknown_floor, thresholds, strictness)
+    return gy.write_galleries(
+        aligned, asserted, os.path.join(args.root, "images", args.split),
+        args.gallery, iou_thr=args.iou, top=args.gallery_top, log=_stderr)
 
 
 def cmd_sweep(args) -> int:
@@ -696,6 +712,11 @@ def cmd_sweep(args) -> int:
             res["chosen_thresholds"] = ref["thresholds"]
     _stderr("\n" + pe.format_sweep(res, top=args.top))
     _stderr("\n" + pe.format_production(res["best"]))
+    if args.gallery:
+        best = res["best"]
+        res["galleries"] = _write_galleries(
+            args, gts, cache, best["decode_floor"], best["unknown_floor"],
+            res.get("chosen_thresholds") or None, best["strictness"])
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as fh:
@@ -1176,6 +1197,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--thresholds", help="JSON per-class threshold overrides")
     sp.add_argument("--strictness", type=float, default=1.0)
     sp.add_argument("--iou", type=float, default=em.DEFAULT_IOU)
+    sp.add_argument("--gallery", help="write annotated false-positive and "
+                                      "false-negative crops plus contact sheets here")
+    sp.add_argument("--gallery-top", type=int, default=48,
+                    help="how many of each to render (all are still counted)")
     sp.set_defaults(func=cmd_prodeval)
 
     sp = sub.add_parser(
@@ -1213,6 +1238,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, help="only print the N best rows")
     sp.add_argument("--iou", type=float, default=em.DEFAULT_IOU)
     sp.add_argument("--out", help="write the full sweep JSON here")
+    sp.add_argument("--gallery", help="write annotated false-positive and "
+                                      "false-negative crops plus contact sheets here")
+    sp.add_argument("--gallery-top", type=int, default=48,
+                    help="how many of each to render (all are still counted)")
     sp.set_defaults(func=cmd_sweep)
 
     # ---- synthetic -> real domain transfer ----
