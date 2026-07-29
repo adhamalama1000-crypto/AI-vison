@@ -61,6 +61,7 @@ from training.electrical import datasets as ds  # noqa: E402
 from training.electrical import dedup as dd  # noqa: E402
 from training.electrical import download as dl  # noqa: E402
 from training.electrical import export as ex  # noqa: E402
+from training.electrical import prodeval as pe  # noqa: E402
 from training.electrical import refine as rf  # noqa: E402
 from training.electrical import split as splitter  # noqa: E402
 from training.electrical import synthetic as syn  # noqa: E402
@@ -626,6 +627,82 @@ def cmd_tune(args) -> int:
     return 0
 
 
+def _prodeval_cache(args, decode_floor: float):
+    """Ground truth + one cached inference pass, or ``(None, None)`` on failure."""
+    gts = tr.load_ground_truth(args.root, args.split)
+    if not gts:
+        _stderr(f"no ground truth under {args.root}/labels/{args.split}")
+        return None, None
+    params = json.loads(args.params) if args.params else {}
+    try:
+        cache = pe.cache_candidates(args.backend, args.root, args.split, params,
+                                    limit=args.limit,
+                                    base_decode_floor=decode_floor,
+                                    log=_stderr)
+    except Exception as exc:
+        _stderr(f"backend unavailable: {exc}")
+        return None, None
+    if not cache.images:
+        _stderr("; ".join(cache.notes) or "no images were evaluated")
+        return None, None
+    return gts, cache
+
+
+def cmd_prodeval(args) -> int:
+    """Evaluate one operating point through the production inference path."""
+    gts, cache = _prodeval_cache(args, args.decode_floor)
+    if cache is None:
+        return 1
+    thresholds = json.loads(args.thresholds) if args.thresholds else None
+    rep = pe.production_report(gts, cache, args.decode_floor, args.unknown_floor,
+                               thresholds=thresholds, strictness=args.strictness,
+                               iou_thr=args.iou)
+    _stderr("\n" + pe.format_production(rep["production"]))
+    _dump(rep)
+    return 0
+
+
+def cmd_sweep(args) -> int:
+    """Sweep decode_floor x unknown_floor and choose a production operating point."""
+    decode = sorted(args.decode_floors or list(pe.DECODE_FLOORS))
+    unknown = sorted(args.unknown_floors or list(pe.UNKNOWN_FLOORS))
+    gts, cache = _prodeval_cache(args, min(decode))
+    if cache is None:
+        return 1
+    _stderr(f"cached {cache.raw_count} raw candidates over {cache.image_count} "
+            f"images at decode_floor={cache.base_decode_floor}; replaying "
+            f"{len(decode) * len(unknown)} operating points")
+    res = pe.sweep(gts, cache, decode, unknown, objective=args.objective,
+                   max_fp_per_image=args.max_fp_per_image,
+                   min_precision=args.min_precision,
+                   min_recall=args.min_recall, iou_thr=args.iou, log=_stderr)
+    if res.get("status") != "swept":
+        _stderr(res.get("reason", "sweep failed"))
+        _dump(res)
+        return 1
+    if args.per_class:
+        best = res["best"]
+        ref = pe.refine_per_class(
+            gts, cache, best["decode_floor"], best["unknown_floor"],
+            objective=args.per_class_objective,
+            min_precision=args.min_precision, rank_by=args.objective,
+            iou_thr=args.iou, log=_stderr)
+        res["per_class_refinement"] = ref
+        if ref.get("adopted"):
+            res["best"] = ref["tuned"]
+            res["best_report"] = ref["report"]
+            res["chosen_thresholds"] = ref["thresholds"]
+    _stderr("\n" + pe.format_sweep(res, top=args.top))
+    _stderr("\n" + pe.format_production(res["best"]))
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(res, fh, indent=2, default=str)
+        _stderr(f"\nwrote {args.out}")
+    _dump(res)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # synthetic -> real domain transfer
 #
@@ -1077,6 +1154,58 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--objective", default="f1", choices=["f1", "precision", "recall"])
     sp.add_argument("--min-precision", type=float, default=0.0)
     sp.set_defaults(func=cmd_tune)
+
+    # ---- production-path evaluation ----
+    sp = sub.add_parser(
+        "prodeval",
+        help="evaluate ONE operating point through the production inference "
+             "path (not Ultralytics val): P/R/mAP plus FP per image, FN per "
+             "image, unknown rate, accepted/rejected counts")
+    sp.add_argument("--root", required=True)
+    sp.add_argument("--backend", default="industrial_onnx")
+    sp.add_argument("--split", default="val")
+    sp.add_argument("--params", help="JSON params for the backend")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--decode-floor", type=float, default=0.05,
+                    help="raw score cutoff applied inside the detector decode")
+    sp.add_argument("--unknown-floor", type=float, default=0.18,
+                    help="below the per-class threshold but above this, a box is "
+                         "kept as 'unknown industrial component' rather than guessed")
+    sp.add_argument("--thresholds", help="JSON per-class threshold overrides")
+    sp.add_argument("--strictness", type=float, default=1.0)
+    sp.add_argument("--iou", type=float, default=em.DEFAULT_IOU)
+    sp.set_defaults(func=cmd_prodeval)
+
+    sp = sub.add_parser(
+        "sweep",
+        help="acceptance sweep: replay the gate over decode_floor x "
+             "unknown_floor and pick the best PRODUCTION operating point")
+    sp.add_argument("--root", required=True)
+    sp.add_argument("--backend", default="industrial_onnx")
+    sp.add_argument("--split", default="val")
+    sp.add_argument("--params", help="JSON params for the backend")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--decode-floors", type=float, nargs="+",
+                    help=f"default {list(pe.DECODE_FLOORS)}")
+    sp.add_argument("--unknown-floors", type=float, nargs="+",
+                    help=f"default {list(pe.UNKNOWN_FLOORS)}")
+    sp.add_argument("--objective", default="production_score",
+                    choices=list(pe.OBJECTIVES),
+                    help="what to maximise; production_score blends F1 and "
+                         "mAP@0.5 and penalises false positives per image")
+    sp.add_argument("--max-fp-per-image", type=float,
+                    help="reject any operating point noisier than this")
+    sp.add_argument("--min-precision", type=float, default=0.0)
+    sp.add_argument("--min-recall", type=float, default=0.0)
+    sp.add_argument("--per-class", action="store_true",
+                    help="also derive per-class thresholds at the winning point, "
+                         "and adopt them only if they improve the objective")
+    sp.add_argument("--per-class-objective", default="f1",
+                    choices=["f1", "precision", "recall"])
+    sp.add_argument("--top", type=int, help="only print the N best rows")
+    sp.add_argument("--iou", type=float, default=em.DEFAULT_IOU)
+    sp.add_argument("--out", help="write the full sweep JSON here")
+    sp.set_defaults(func=cmd_sweep)
 
     # ---- synthetic -> real domain transfer ----
     sp = sub.add_parser(
