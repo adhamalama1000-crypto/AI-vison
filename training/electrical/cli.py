@@ -631,8 +631,22 @@ def _prodeval_cache(args, decode_floor: float):
     """Ground truth + one cached inference pass, or ``(None, None)`` on failure."""
     gts = tr.load_ground_truth(args.root, args.split)
     if not gts:
-        _stderr(f"no ground truth under {args.root}/labels/{args.split}")
-        return None, None
+        # Distinguish a misconfigured root from a legitimate negatives-only set.
+        # A hard-negative dataset (see download.fetch_openimages_negatives) has a
+        # label file per image and every one of them is empty: the assertion is
+        # that these real images contain zero taxonomy components. False
+        # positives per image and the unknown rate are exactly what such a set
+        # measures, so refusing it would throw away the only real-image
+        # measurement available. Recall and mAP are undefined and reported as such.
+        lbl_dir = os.path.join(args.root, "labels", args.split)
+        n_labels = len([f for f in os.listdir(lbl_dir)
+                        if f.endswith(".txt")]) if os.path.isdir(lbl_dir) else 0
+        if not n_labels:
+            _stderr(f"no ground truth under {lbl_dir}")
+            return None, None
+        _stderr(f"{n_labels} label file(s) present and all empty: evaluating "
+                f"{args.root} as a NEGATIVES-ONLY set. Every detection counts as "
+                f"a false positive; recall, mAP and per-class AP are undefined.")
     params = json.loads(args.params) if args.params else {}
     try:
         cache = pe.cache_candidates(args.backend, args.root, args.split, params,
