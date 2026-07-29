@@ -537,6 +537,43 @@ def test_verify_bundle_accepts_an_older_prefix_bundle(tmp_path):
     assert "taxonomy_note" in info
 
 
+def test_verify_bundle_accepts_a_profile_bundle(tmp_path):
+    """A profile-trained bundle carries a SUBSET of the taxonomy in its own
+    training order. That is the documented path (profiles.apply remaps indices to
+    0..N-1) and the runtime resolves labels by name from classes.json, so the
+    order relative to CLASS_ORDER never enters into it. Flagging it as a mismatch
+    made install_bundle refuse every profile-trained model."""
+    core8 = ["mcb", "mccb", "contactor", "relay", "plc", "terminal_block",
+             "power_supply", "vfd"]
+    assert core8 != list(tax.CLASS_ORDER[:len(core8)])   # genuinely not a prefix
+    ex.write_classes_json(str(tmp_path), core8)
+    ex.write_labels(str(tmp_path), core8)
+    info = ex.verify_bundle(str(tmp_path))
+    assert info["problems"] == []
+    assert info["profile_bundle"] is True
+    assert "profile-trained bundle" in info["taxonomy_note"]
+
+
+def test_verify_bundle_rejects_labels_the_taxonomy_cannot_resolve(tmp_path):
+    """An unresolvable label maps to nothing: the runtime reports every detection
+    on that index as unknown_industrial_component."""
+    labels = ["mcb", "not_a_real_device", "contactor"]
+    ex.write_classes_json(str(tmp_path), labels)
+    ex.write_labels(str(tmp_path), labels)
+    info = ex.verify_bundle(str(tmp_path))
+    assert not info["ok"]
+    assert any("not resolvable taxonomy ids" in p for p in info["problems"])
+
+
+def test_verify_bundle_rejects_a_duplicated_class(tmp_path):
+    labels = ["mcb", "contactor", "mcb"]
+    ex.write_classes_json(str(tmp_path), labels)
+    ex.write_labels(str(tmp_path), labels)
+    info = ex.verify_bundle(str(tmp_path))
+    assert not info["ok"]
+    assert any("more than one index" in p for p in info["problems"])
+
+
 def test_verify_bundle_requires_the_label_files(tmp_path):
     info = ex.verify_bundle(str(tmp_path))
     assert not info["ok"]

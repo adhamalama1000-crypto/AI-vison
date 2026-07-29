@@ -975,7 +975,7 @@ def label_names(dataset_yaml: Optional[str]) -> Optional[list[str]]:
     return None
 
 
-def _label_index(root: str, names: Optional[Sequence[str]] = None
+def label_index(root: str, names: Optional[Sequence[str]] = None
                  ) -> tuple[dict[int, str], str]:
     """Index → class id map for a dataset root, and where the map came from.
 
@@ -997,12 +997,12 @@ def analyse_dataset(root: str, splits: Sequence[str] = ("train", "val", "test"),
     """Per-class instance/image counts and box-size distribution.
 
     Label indices are interpreted in the dataset's **own** label space — see
-    :func:`_label_index`. The result records which space that was, because the
+    :func:`label_index`. The result records which space that was, because the
     same label file means different classes in a 54-class taxonomy dataset and
     in an 8-class profile dataset, and a count attached to the wrong class name
     is worse than no count at all.
     """
-    inv, label_space = _label_index(root, names)
+    inv, label_space = label_index(root, names)
     per_class: Counter = Counter()
     images_with: defaultdict[str, set] = defaultdict(set)
     sizes: defaultdict[str, list[float]] = defaultdict(list)
@@ -1322,7 +1322,7 @@ def custom_collection_plan() -> dict:
 __all__ = [
     "DatasetSource", "SOURCES", "SOURCE_INDEX", "plan", "read_yolo_names",
     "build_index_map", "remap_yolo_dataset", "merge", "write_dataset_yaml",
-    "analyse_dataset", "label_names", "coverage_report",
+    "analyse_dataset", "label_names", "label_index", "coverage_report",
     "custom_collection_plan",
     "requirements_report", "PRIORITY_CLASSES", "INSTANCES_PER_IMAGE_ESTIMATE",
     "MIN_INSTANCES_TRAINABLE", "MIN_INSTANCES_RELIABLE", "IMAGE_EXTS",

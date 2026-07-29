@@ -126,6 +126,22 @@ def test_fn_per_image_is_divided_by_the_image_count():
     assert prod["fn_per_image"] == 1.0
 
 
+def test_ground_truth_is_aligned_to_the_images_actually_inferred():
+    """With --limit, predictions cover a subset while load_ground_truth reads the
+    whole split. Scoring the two against each other turns every unevaluated
+    image's boxes into false negatives and reports a recall that describes the
+    limit rather than the model."""
+    gts = [_gt("a")] + [_gt(f"skipped_{i}") for i in range(9)]
+    cache = _cache([("a", [_cand("mcb", 0.9)])])          # only image "a" inferred
+    prod = pe.production_report(gts, cache, 0.05, 0.18,
+                               check_plausibility=False)["production"]
+    assert prod["ground_truth"] == 1
+    assert prod["ground_truth_outside_evaluated_images"] == 9
+    assert prod["recall"] == 1.0
+    assert prod["false_negatives"] == 0
+    assert prod["fn_per_image"] == 0.0
+
+
 def test_fp_per_image_counts_spurious_boxes_per_image():
     gts = [_gt("a")]
     cache = _cache([("a", [_cand("mcb", 0.9),

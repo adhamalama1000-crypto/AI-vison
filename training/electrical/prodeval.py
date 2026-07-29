@@ -244,6 +244,15 @@ def production_report(gts: Sequence[Mapping], cache: CandidateCache,
             f"decode_floor {decode_floor} is below the {cache.base_decode_floor} "
             "floor inference was cached at; re-cache before evaluating it")
 
+    # Align the ground truth to the images actually inferred. With --limit,
+    # predictions cover a subset while load_ground_truth reads the whole split;
+    # scoring the two against each other turns every unevaluated image's boxes
+    # into false negatives and reports a recall that has nothing to do with the
+    # model. Filtering here rather than in the caller means no caller can forget.
+    ids = {i.image_id for i in cache.images}
+    gt_all = len(gts)
+    gts = [g for g in gts if g.get("image_id") in ids]
+
     cfg = gate_config(unknown_floor, thresholds, strictness, check_plausibility)
     gated = replay_gate(cache, decode_floor, cfg)
     asserted, unknown = gated["asserted"], gated["unknown"]
@@ -270,6 +279,10 @@ def production_report(gts: Sequence[Mapping], cache: CandidateCache,
         "strictness": round(float(strictness), 4),
         "images": cache.image_count,
         "ground_truth": len(gts),
+        #: Boxes belonging to images outside the evaluated set, excluded above.
+        #: Non-zero whenever --limit is in play; reported so a smaller
+        #: ground-truth count than the split's total is explained, not mysterious.
+        "ground_truth_outside_evaluated_images": gt_all - len(gts),
         "precision": rep["overall"]["precision"],
         "recall": rep["overall"]["recall"],
         "f1": rep["overall"]["f1"],

@@ -401,11 +401,39 @@ def collect_predictions(recognizer, image_dir: str,
     return out
 
 
-def load_ground_truth(dataset_root: str, split: str = "val") -> list[dict]:
-    """Read YOLO labels into metric-ready ground truth (absolute pixel boxes)."""
+def evaluated_image_ids(image_dir: str, limit: Optional[int] = None) -> set[str]:
+    """The image ids :func:`collect_predictions` will actually run over.
+
+    Mirrors its file selection so ground truth can be restricted to the same set.
+    An image that produced no detections contributes nothing to ``preds``, so the
+    evaluated set cannot be recovered from the predictions afterwards.
+    """
+    if not os.path.isdir(image_dir):
+        return set()
+    files = [f for f in sorted(os.listdir(image_dir))
+             if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp"))]
+    if limit:
+        files = files[:limit]
+    return {os.path.splitext(f)[0] for f in files}
+
+
+def load_ground_truth(dataset_root: str, split: str = "val",
+                      names: Optional[Sequence[str]] = None) -> list[dict]:
+    """Read YOLO labels into metric-ready ground truth (absolute pixel boxes).
+
+    Label indices are read in the dataset's **own** label space, which for a
+    profile-scoped dataset is not the taxonomy's: ``profiles.apply`` remaps
+    indices to 0..N-1. Reading an 8-class core8 split through the 54-class
+    taxonomy index yields ground truth labelled ``rccb``/``fuse`` for boxes that
+    are actually ``contactor``/``relay``, and every metric computed against it is
+    meaningless — precision and recall collapse for a reason that has nothing to
+    do with the model.
+    """
     import cv2
 
-    inv = {v: k for k, v in tax.class_index().items()}
+    from . import datasets as ds
+
+    inv, _ = ds.label_index(dataset_root, names)
     img_dir = os.path.join(dataset_root, "images", split)
     lbl_dir = os.path.join(dataset_root, "labels", split)
     gts: list[dict] = []
@@ -462,8 +490,14 @@ def evaluate_backend(backend_id: str, dataset_root: str, split: str = "val",
     except Exception as exc:
         return {"status": "skipped", "reason": f"{backend_id}: {exc}"}
 
-    preds = collect_predictions(inst, os.path.join(dataset_root, "images", split),
-                               limit=limit)
+    image_dir = os.path.join(dataset_root, "images", split)
+    if limit:
+        # Restrict the ground truth to the images that were inferred. Otherwise
+        # every box in the un-inferred remainder of the split counts as a false
+        # negative and the reported recall describes the limit, not the model.
+        keep = evaluated_image_ids(image_dir, limit)
+        gts = [g for g in gts if g.get("image_id") in keep]
+    preds = collect_predictions(inst, image_dir, limit=limit)
     report = em.evaluate(gts, preds)
     report["status"] = "evaluated"
     report["backend_id"] = backend_id
