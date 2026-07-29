@@ -115,6 +115,30 @@ head is producing useful gradients.
 `--lr0` defaults to 0.002, well below the from-scratch 0.01. Fine-tuning at a
 training-scale learning rate is the most common way to destroy a good checkpoint.
 
+## Blocker: no real images are reachable from this environment
+
+The machinery above is complete, tested and runnable. It has not been *run on real data*,
+because there is currently no way to obtain real data here. Every acquisition route was
+checked, not assumed:
+
+| Route | State |
+|---|---|
+| Roboflow MCP | `token expired` — needs interactive re-authorization, unavailable in a non-interactive session |
+| Roboflow REST API | no `ROBOFLOW_API_KEY` in the environment or `.env`; `api.roboflow.com` and `universe.roboflow.com` are both unreachable through the proxy (curl returns `000`) |
+| Kaggle | no `~/.kaggle/kaggle.json` token |
+| Open Images (FiftyOne) | `storage.googleapis.com` is reachable, but Open Images has no electrical-panel component classes |
+
+**To unblock, one of these is needed:**
+
+1. Re-authorize the Roboflow connector, **or**
+2. Set `ROBOFLOW_API_KEY` in the gitignored `.env` — never pasted into chat — *and* allow
+   `api.roboflow.com` in the environment's network policy, **or**
+3. Provide your own panel photographs. This is the better option regardless: your own
+   cabinets are the actual target distribution, and public switchgear sets are mostly
+   product photography rather than installed panels.
+
+Once any of those is in place the workflow below runs unchanged.
+
 ## Real-data requirements
 
 The gap closes with real images and nothing else. Per-class instance counts needed on
@@ -181,6 +205,32 @@ inserting a class in the middle silently invalidates every checkpoint trained on
 > was reordered so that `core8` is its prefix. `vfd` moved from profile index 9 to 7.
 > This was safe only because no `core15` model had been trained yet. Any future reorder
 > would not be.
+
+## Two different mAP numbers, and which one to believe
+
+A checkpoint has two legitimate mAP values, and they can differ enormously:
+
+- **Training-time mAP** — what Ultralytics prints each epoch and writes to `results.csv`.
+  Computed by its own validator at a confidence floor of ~0.001, which counts detections
+  no production system would ever surface.
+- **Served mAP** — what `cli eval` and `cli domain-gap` report, because they go through
+  the registered production backend. That decodes at `conf=0.10` and then applies the
+  per-class gates, so it measures what the API will actually return.
+
+Measured on the same checkpoint mid-run: training-time mAP@50 **0.63** with recall 0.92,
+served mAP@50 **0.151** with recall 0.16. Nothing is broken — the model's true positives
+were mostly scoring below 0.10 at that point, so the production gate discarded them.
+
+Both numbers matter, and they answer different questions. Training-time mAP tells you
+whether learning is progressing. **Served mAP is the only one that describes the
+product**, and it is the one to quote in an acceptance decision. A report that cites the
+training number as evidence of production readiness is overstating the model, which is
+why `cli eval` deliberately routes through the real backend rather than calling the
+trainer's validator.
+
+If served recall is far below training recall at the end of a run, the fix is more or
+better data — not lowering the gate. Lowering it converts the shortfall into false
+positives, which in an inspection report is worse than a miss.
 
 ## What "done" looks like
 
