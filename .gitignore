@@ -38,3 +38,6 @@ frontend/dist/
 # OS
 .DS_Store
 frontend/*.tsbuildinfo
+
+# Exported model bundles (best.pt / best.onnx are tens of MB each).
+dist/

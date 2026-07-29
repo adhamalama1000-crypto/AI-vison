@@ -1,0 +1,613 @@
+{
+  "production": {
+    "decode_floor": 0.2,
+    "unknown_floor": 0.25,
+    "strictness": 1.0,
+    "images": 161,
+    "ground_truth": 0,
+    "ground_truth_outside_evaluated_images": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "map_50": 0.0,
+    "map_50_95": 0.0,
+    "macro_precision": 0.0,
+    "macro_recall": 0.0,
+    "fp_per_image": 0.3168,
+    "fn_per_image": 0.0,
+    "false_positives": 51,
+    "false_negatives": 0,
+    "accepted_detections": 96,
+    "accepted_asserted": 51,
+    "accepted_unknown": 45,
+    "rejected_detections": 362,
+    "unknown_rate": 0.4688,
+    "detections_per_image": 0.5963,
+    "recall_localised": 0.0,
+    "classification_shortfall": 0.0,
+    "raw_candidates": 458,
+    "kept_after_decode_floor": 458,
+    "dropped_below_decode_floor": 0,
+    "dropped_by_gate": 362,
+    "dropped_by_reason": {
+      "nms_same_class": 330,
+      "below_unknown_floor": 29,
+      "implausible_aspect_ratio": 3
+    },
+    "truncated_images": 0
+  },
+  "detail": {
+    "iou_threshold": 0.5,
+    "overall": {
+      "tp": 0,
+      "fp": 51,
+      "fn": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "map_50": 0.0,
+    "map_50_95": 0.0,
+    "map_by_iou": {
+      "0.50": 0.0,
+      "0.55": 0.0,
+      "0.60": 0.0,
+      "0.65": 0.0,
+      "0.70": 0.0,
+      "0.75": 0.0,
+      "0.80": 0.0,
+      "0.85": 0.0,
+      "0.90": 0.0,
+      "0.95": 0.0
+    },
+    "per_class": {
+      "mcb": {
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "ap": 0.0,
+        "support": 0,
+        "name": "MCB (Miniature Circuit Breaker)"
+      },
+      "mccb": {
+        "tp": 0,
+        "fp": 4,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "ap": 0.0,
+        "support": 0,
+        "name": "MCCB (Moulded Case Circuit Breaker)"
+      },
+      "plc": {
+        "tp": 0,
+        "fp": 6,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "ap": 0.0,
+        "support": 0,
+        "name": "PLC (Programmable Logic Controller)"
+      },
+      "relay": {
+        "tp": 0,
+        "fp": 2,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "ap": 0.0,
+        "support": 0,
+        "name": "Control Relay"
+      },
+      "terminal_block": {
+        "tp": 0,
+        "fp": 38,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "ap": 0.0,
+        "support": 0,
+        "name": "Terminal Block"
+      }
+    },
+    "macro_precision": 0.0,
+    "macro_recall": 0.0,
+    "false_positive_analysis": {
+      "total": 51,
+      "by_cause": {
+        "spurious_detection": 51
+      },
+      "worst_offenders": [
+        {
+          "class_id": "terminal_block",
+          "name": "Terminal Block",
+          "false_positives": 38
+        },
+        {
+          "class_id": "plc",
+          "name": "PLC (Programmable Logic Controller)",
+          "false_positives": 6
+        },
+        {
+          "class_id": "mccb",
+          "name": "MCCB (Moulded Case Circuit Breaker)",
+          "false_positives": 4
+        },
+        {
+          "class_id": "relay",
+          "name": "Control Relay",
+          "false_positives": 2
+        },
+        {
+          "class_id": "mcb",
+          "name": "MCB (Miniature Circuit Breaker)",
+          "false_positives": 1
+        }
+      ],
+      "examples": [
+        {
+          "image_id": "2fcfd045bfb9c940",
+          "class_id": "terminal_block",
+          "box": [
+            353.2950744628906,
+            408.80194091796875,
+            373.5174255371094,
+            485.11444091796875
+          ],
+          "score": 0.904190182685852,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "1bd2d7e6c3e1150d",
+          "class_id": "mccb",
+          "box": [
+            426.7705078125,
+            577.2224731445312,
+            589.7371215820312,
+            723.1929931640625
+          ],
+          "score": 0.7981520295143127,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "3cc7f2445d49a7f8",
+          "class_id": "plc",
+          "box": [
+            286.74542236328125,
+            108.632568359375,
+            799.0499877929688,
+            304.93475341796875
+          ],
+          "score": 0.7961731553077698,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "6d6067455a3c9b05",
+          "class_id": "terminal_block",
+          "box": [
+            787.8272705078125,
+            583.2989501953125,
+            855.05029296875,
+            622.3385620117188
+          ],
+          "score": 0.7945402264595032,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "00f3addd05a6f8e8",
+          "class_id": "terminal_block",
+          "box": [
+            386.2275390625,
+            0.0,
+            412.3224182128906,
+            147.4099578857422
+          ],
+          "score": 0.7928736209869385,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "0d54617f41cfd271",
+          "class_id": "terminal_block",
+          "box": [
+            261.23065185546875,
+            534.67724609375,
+            757.0086059570312,
+            717.2708129882812
+          ],
+          "score": 0.7913615107536316,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "3221bec581ae7178",
+          "class_id": "terminal_block",
+          "box": [
+            421.3081970214844,
+            143.94961547851562,
+            559.1671142578125,
+            220.6303253173828
+          ],
+          "score": 0.7823840379714966,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "4e0d4accacf4e044",
+          "class_id": "terminal_block",
+          "box": [
+            485.93927001953125,
+            250.5987091064453,
+            516.95361328125,
+            467.0106506347656
+          ],
+          "score": 0.7659679651260376,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "01d8397c9c460482",
+          "class_id": "terminal_block",
+          "box": [
+            544.0009765625,
+            0.01247558556497097,
+            567.87109375,
+            150.9024200439453
+          ],
+          "score": 0.7415735125541687,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "ebc4f52c75fb78e0",
+          "class_id": "mccb",
+          "box": [
+            157.07302856445312,
+            321.81817626953125,
+            531.3767700195312,
+            642.7745971679688
+          ],
+          "score": 0.724073588848114,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "632cccb0cda420f8",
+          "class_id": "terminal_block",
+          "box": [
+            401.91162109375,
+            487.6519470214844,
+            467.39306640625,
+            785.72412109375
+          ],
+          "score": 0.7165088653564453,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "46e344332f867034",
+          "class_id": "terminal_block",
+          "box": [
+            504.19366455078125,
+            0.0,
+            531.6641845703125,
+            187.477783203125
+          ],
+          "score": 0.7109676599502563,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "c24e47e5ee6a3113",
+          "class_id": "terminal_block",
+          "box": [
+            610.8389892578125,
+            592.3972778320312,
+            633.1995239257812,
+            629.6683349609375
+          ],
+          "score": 0.7018827199935913,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "470cc017d7ada507",
+          "class_id": "terminal_block",
+          "box": [
+            946.0166015625,
+            228.0695343017578,
+            959.0384521484375,
+            256.96624755859375
+          ],
+          "score": 0.6980692148208618,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "b4a9b963921d2c57",
+          "class_id": "terminal_block",
+          "box": [
+            346.59344482421875,
+            361.1392517089844,
+            606.1554565429688,
+            627.46337890625
+          ],
+          "score": 0.6681985259056091,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "bb3c7c92fb675714",
+          "class_id": "terminal_block",
+          "box": [
+            371.1796875,
+            764.4138793945312,
+            404.0308532714844,
+            790.2120971679688
+          ],
+          "score": 0.6539288759231567,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "58aa699c8e750ebf",
+          "class_id": "mccb",
+          "box": [
+            224.08120727539062,
+            304.6939392089844,
+            531.5517578125,
+            552.4334716796875
+          ],
+          "score": 0.6522994041442871,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "4e0d4accacf4e044",
+          "class_id": "terminal_block",
+          "box": [
+            807.8225708007812,
+            228.05087280273438,
+            847.3116455078125,
+            441.7237243652344
+          ],
+          "score": 0.6366041898727417,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "26173ee27cd10426",
+          "class_id": "terminal_block",
+          "box": [
+            2.5335693359375,
+            635.1461791992188,
+            407.9689636230469,
+            683.0
+          ],
+          "score": 0.6359447240829468,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "01052b9ad24f99f3",
+          "class_id": "terminal_block",
+          "box": [
+            899.4197998046875,
+            0.0,
+            1021.85791015625,
+            333.14666748046875
+          ],
+          "score": 0.6347965002059937,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "3ff1904d4bb971f4",
+          "class_id": "plc",
+          "box": [
+            351.7149353027344,
+            425.74432373046875,
+            835.5397338867188,
+            538.2685546875
+          ],
+          "score": 0.6307228803634644,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "4851eb5f44c9d2f5",
+          "class_id": "plc",
+          "box": [
+            102.461669921875,
+            435.47412109375,
+            425.51812744140625,
+            664.7600708007812
+          ],
+          "score": 0.6286514401435852,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "adf36557c2d68036",
+          "class_id": "terminal_block",
+          "box": [
+            113.6851577758789,
+            50.986671447753906,
+            572.927734375,
+            317.025634765625
+          ],
+          "score": 0.6257818937301636,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "8126fed2c7dd3199",
+          "class_id": "terminal_block",
+          "box": [
+            270.4549865722656,
+            234.29263305664062,
+            729.4027099609375,
+            382.8797302246094
+          ],
+          "score": 0.6207250952720642,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        },
+        {
+          "image_id": "01d8397c9c460482",
+          "class_id": "terminal_block",
+          "box": [
+            0.24619141221046448,
+            336.640625,
+            255.2311553955078,
+            418.84259033203125
+          ],
+          "score": 0.6146160960197449,
+          "best_overlap_class": null,
+          "best_overlap_iou": 0.0,
+          "cause": "spurious_detection"
+        }
+      ]
+    },
+    "false_negative_analysis": {
+      "total": 0,
+      "by_class": {},
+      "examples": []
+    },
+    "counts": {
+      "ground_truth": 0,
+      "predictions": 51
+    }
+  },
+  "backend_id": "industrial_onnx",
+  "split": "val",
+  "iou_threshold": 0.5,
+  "evaluated_via": "production inference path (recognize -> postprocess.run)",
+  "galleries": {
+    "out_dir": "dist/gallery_real_run1",
+    "iou_threshold": 0.5,
+    "false_positives": {
+      "total": 51,
+      "rendered": 40,
+      "by_cause_rendered": {
+        "spurious_detection": 40
+      },
+      "by_cause_all": {
+        "spurious_detection": 51
+      },
+      "worst_classes": [
+        {
+          "class_id": "terminal_block",
+          "name": "Terminal Block",
+          "false_positives": 38
+        },
+        {
+          "class_id": "plc",
+          "name": "PLC (Programmable Logic Controller)",
+          "false_positives": 6
+        },
+        {
+          "class_id": "mccb",
+          "name": "MCCB (Moulded Case Circuit Breaker)",
+          "false_positives": 4
+        },
+        {
+          "class_id": "relay",
+          "name": "Control Relay",
+          "false_positives": 2
+        },
+        {
+          "class_id": "mcb",
+          "name": "MCB (Miniature Circuit Breaker)",
+          "false_positives": 1
+        }
+      ],
+      "contact_sheet": "dist/gallery_real_run1/fp_gallery.png",
+      "files": [
+        "spurious_detection/001_terminal_block_0.90_2fcfd045bfb9c940.jpg",
+        "spurious_detection/002_mccb_0.80_1bd2d7e6c3e1150d.jpg",
+        "spurious_detection/003_plc_0.80_3cc7f2445d49a7f8.jpg",
+        "spurious_detection/004_terminal_block_0.79_6d6067455a3c9b05.jpg",
+        "spurious_detection/005_terminal_block_0.79_00f3addd05a6f8e8.jpg",
+        "spurious_detection/006_terminal_block_0.79_0d54617f41cfd271.jpg",
+        "spurious_detection/007_terminal_block_0.78_3221bec581ae7178.jpg",
+        "spurious_detection/008_terminal_block_0.77_4e0d4accacf4e044.jpg",
+        "spurious_detection/009_terminal_block_0.74_01d8397c9c460482.jpg",
+        "spurious_detection/010_mccb_0.72_ebc4f52c75fb78e0.jpg",
+        "spurious_detection/011_terminal_block_0.72_632cccb0cda420f8.jpg",
+        "spurious_detection/012_terminal_block_0.71_46e344332f867034.jpg",
+        "spurious_detection/013_terminal_block_0.70_c24e47e5ee6a3113.jpg",
+        "spurious_detection/014_terminal_block_0.70_470cc017d7ada507.jpg",
+        "spurious_detection/015_terminal_block_0.67_b4a9b963921d2c57.jpg",
+        "spurious_detection/016_terminal_block_0.65_bb3c7c92fb675714.jpg",
+        "spurious_detection/017_mccb_0.65_58aa699c8e750ebf.jpg",
+        "spurious_detection/018_terminal_block_0.64_4e0d4accacf4e044.jpg",
+        "spurious_detection/019_terminal_block_0.64_26173ee27cd10426.jpg",
+        "spurious_detection/020_terminal_block_0.63_01052b9ad24f99f3.jpg",
+        "spurious_detection/021_plc_0.63_3ff1904d4bb971f4.jpg",
+        "spurious_detection/022_plc_0.63_4851eb5f44c9d2f5.jpg",
+        "spurious_detection/023_terminal_block_0.63_adf36557c2d68036.jpg",
+        "spurious_detection/024_terminal_block_0.62_8126fed2c7dd3199.jpg",
+        "spurious_detection/025_terminal_block_0.61_01d8397c9c460482.jpg",
+        "spurious_detection/026_terminal_block_0.61_e0aafdc70e5a15a0.jpg",
+        "spurious_detection/027_terminal_block_0.61_01052b9ad24f99f3.jpg",
+        "spurious_detection/028_terminal_block_0.58_2e578050db07fe0c.jpg",
+        "spurious_detection/029_terminal_block_0.56_13d30e2f33a61af1.jpg",
+        "spurious_detection/030_mcb_0.56_05f5fdc84c2d31ef.jpg",
+        "spurious_detection/031_terminal_block_0.56_01052b9ad24f99f3.jpg",
+        "spurious_detection/032_terminal_block_0.56_e564116f6401c7bc.jpg",
+        "spurious_detection/033_terminal_block_0.55_6d6067455a3c9b05.jpg",
+        "spurious_detection/034_terminal_block_0.54_d317dbad345e24ae.jpg",
+        "spurious_detection/035_terminal_block_0.52_2e578050db07fe0c.jpg",
+        "spurious_detection/036_terminal_block_0.51_0e2315ffe9fc4f8d.jpg",
+        "spurious_detection/037_mccb_0.51_ec59924d7484e7fb.jpg",
+        "spurious_detection/038_terminal_block_0.50_2a1832e1ced8c4c7.jpg",
+        "spurious_detection/039_terminal_block_0.49_01d8397c9c460482.jpg",
+        "spurious_detection/040_relay_0.48_4f7ff8f9933952e1.jpg"
+      ]
+    },
+    "false_negatives": {
+      "total": 0,
+      "rendered": 0,
+      "by_class_rendered": {},
+      "by_class_all": {},
+      "contact_sheet": null,
+      "files": []
+    }
+  }
+}
