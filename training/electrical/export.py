@@ -79,17 +79,49 @@ CLASSES_JSON_COMMENT = (
 
 def write_classes_json(directory: str,
                        classes: Sequence[str] = tax.CLASS_ORDER,
-                       taxonomy_version: str = "5.1") -> str:
+                       taxonomy_version: str = "5.1",
+                       profile: Optional[str] = None) -> str:
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, "classes.json")
+    payload = {"_comment": CLASSES_JSON_COMMENT,
+               "taxonomy_version": taxonomy_version,
+               "class_count": len(classes),
+               "classes": list(classes),
+               "display_names": {c: tax.display_name(c) for c in classes}}
+    if profile:
+        payload["profile"] = profile
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump({"_comment": CLASSES_JSON_COMMENT,
-                   "taxonomy_version": taxonomy_version,
-                   "class_count": len(classes),
-                   "classes": list(classes),
-                   "display_names": {c: tax.display_name(c) for c in classes}},
-                  fh, indent=2)
+        json.dump(payload, fh, indent=2)
     return path
+
+
+def classes_for_dataset(dataset_yaml: Optional[str]) -> Optional[list[str]]:
+    """Read the label space a model was actually trained against.
+
+    A profile-trained checkpoint has an N-class head, not 54. Exporting it with the
+    default full-taxonomy ``labels.txt`` produces a bundle whose labels disagree with
+    its graph — :func:`verify_bundle` catches that as a class-count mismatch, but the
+    caller should not have to hit the error to discover which label space to use. The
+    dataset's own ``dataset.yaml`` is the authoritative record of it.
+    """
+    if not dataset_yaml or not os.path.exists(dataset_yaml):
+        return None
+    try:
+        import yaml
+
+        with open(dataset_yaml, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except Exception:
+        return None
+    names = data.get("names")
+    if isinstance(names, dict):
+        try:
+            return [str(names[k]) for k in sorted(names, key=lambda x: int(x))]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(names, list) and names:
+        return [str(n) for n in names]
+    return None
 
 
 def collect_artifacts(run_dir: str, out_dir: str,
@@ -435,6 +467,28 @@ def export_bundle(weights: str, out_dir: str,
         return {"status": "failed", "reason": f"checkpoint not found: {weights}"}
     os.makedirs(out_dir, exist_ok=True)
 
+    # A profile-trained checkpoint has an N-class head. If the caller did not name the
+    # label space, take it from the dataset the model was trained on rather than
+    # defaulting to the full 54-class taxonomy and shipping labels that disagree with
+    # the graph.
+    profile_name: Optional[str] = None
+    if classes is tax.CLASS_ORDER:
+        from_dataset = classes_for_dataset(
+            (metadata or {}).get("data") if metadata else None)
+        if from_dataset and list(from_dataset) != list(tax.CLASS_ORDER):
+            classes = from_dataset
+            say(f"label space taken from the training dataset: "
+                f"{len(classes)} class(es) (not the full 54-class taxonomy)")
+            try:
+                from . import profiles as _pf
+
+                for prof in _pf.PROFILES.values():
+                    if list(prof.classes) == list(classes):
+                        profile_name = prof.name
+                        break
+            except Exception:
+                profile_name = None
+
     pt_dst = os.path.join(out_dir, "best.pt")
     if os.path.abspath(weights) != os.path.abspath(pt_dst):
         shutil.copy2(weights, pt_dst)
@@ -442,8 +496,13 @@ def export_bundle(weights: str, out_dir: str,
     say(f"best.pt -> {pt_dst}")
 
     result["files"]["labels.txt"] = write_labels(out_dir, classes)
-    result["files"]["classes.json"] = write_classes_json(out_dir, classes)
-    say(f"labels.txt / classes.json -> {len(classes)} class(es)")
+    result["files"]["classes.json"] = write_classes_json(
+        out_dir, classes, profile=profile_name)
+    result["label_space"] = {"class_count": len(classes),
+                             "profile": profile_name,
+                             "classes": list(classes)}
+    say(f"labels.txt / classes.json -> {len(classes)} class(es)"
+        + (f" (profile '{profile_name}')" if profile_name else ""))
 
     # -- ONNX ------------------------------------------------------------
     onnx_path: Optional[str] = None
@@ -457,11 +516,16 @@ def export_bundle(weights: str, out_dir: str,
             "no best.onnx in this bundle — the CPU ONNX runtime backend cannot "
             "load it. Export on a machine with ultralytics installed.")
     else:
+        from .train import quiet_stdout
+
         try:
             say(f"exporting ONNX at {imgsz}px, opset {opset}")
-            exported = YOLO(pt_dst).export(
-                format="onnx", imgsz=imgsz, opset=opset, simplify=simplify,
-                half=half, dynamic=dynamic)
+            # Ultralytics prints its banner and export summary to stdout, which would
+            # corrupt this command's JSON output. Redirected to stderr, not silenced.
+            with quiet_stdout():
+                exported = YOLO(pt_dst).export(
+                    format="onnx", imgsz=imgsz, opset=opset, simplify=simplify,
+                    half=half, dynamic=dynamic)
             src = str(exported) if exported else ""
             if src and os.path.exists(src):
                 onnx_path = os.path.join(out_dir, "best.onnx")

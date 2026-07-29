@@ -1,5 +1,180 @@
 # Changelog
 
+## [5.5.0] — Focused class scope, and the road to 85% mAP
+
+The 54-class taxonomy is the right *inference* vocabulary and the wrong *training*
+label space for a first production model. mAP is a mean over classes, so 54 classes on
+thin data averages to a number no confidence threshold can rescue; 15 classes with
+several hundred instances each is a model that works.
+
+### Class profiles
+
+- **`training/electrical/profiles.py`** — named, ordered subsets of the taxonomy to
+  train against. `core15` is exactly the requested priority list; `core18` appends
+  `overload_relay` (the contactor-without-overload check is one of the report's most
+  useful findings), `din_rail` and `circuit_breaker`; `full` is all 54. `core18` is an
+  append-only superset of `core15`, so a `core15` checkpoint fine-tunes onto it rather
+  than needing a retrain.
+- **`cli scope`** filters a dataset to a profile **and remaps every label index to
+  0..N-1**. That remapping is the whole point: a dataset filtered to 15 classes but
+  still carrying 54-class indices trains a 15-class head against indices scattered up
+  to 53 — the loss falls, the run looks healthy, every prediction is garbage, and no
+  trainer warns you. It has its own tests.
+- Images left with no in-profile boxes are **kept as negatives** by default, because an
+  image of only out-of-profile devices is how a detector learns not to fire on them.
+  `--drop-empty` removes them; the warning suggests capping negatives at 10–15%.
+- **`--only-present`** narrows a profile to the classes that actually have data. An
+  absent class contributes a zero to the mAP mean and nothing to the model, so
+  reporting a 15-class mAP with 7 empty classes misleads in both directions.
+- **No runtime change needed.** A profile bundle ships a matching `classes.json`; the
+  recogniser reads it and canonicalises through the taxonomy, so a 15-class model still
+  returns canonical ids and still falls back to `unknown_industrial_component`.
+- **"Switch" was read as `selector_switch`** — the taxonomy distinguishes selector,
+  changeover and Ethernet switches, and the brief lists it beside emergency stop and
+  indicator lamp. Documented, with `core18` available if a transfer switch was meant.
+
+### Data requirement, quantified
+
+`requirement_estimate()` derives what each mAP target costs, as bands rather than
+points because the real figure depends on intra-class visual variety — a property of the
+capture programme, not the model:
+
+| Target mAP50 | Instances/class | 15-class total | Images |
+|---|---|---|---|
+| 0.50 | 150–300 | 2,250–4,500 | ~700–1,400 |
+| 0.70 | 300–600 | 4,500–9,000 | ~1,400–2,800 |
+| **0.85** | **700–1,200** | **10,500–18,000** | **~3,300–5,600** |
+| 0.92 | 1,500–2,500 | 22,500–37,500 | ~7,000–11,700 |
+
+The image count is deliberately *not* instances ÷ boxes-per-image: a panel photograph
+yields ~12 boxes but only ~4 distinct classes, and an image full of MCBs contributes
+nothing to the VFD count. That co-occurrence factor is why 10,500 instances needs ~3,300
+images rather than ~875.
+
+**[`docs/PATH_TO_PRODUCTION_MODEL.md`](docs/PATH_TO_PRODUCTION_MODEL.md)** is the full
+plan: class scope, data requirement per target, capture priority ordered by
+instances-per-hour, the training recipe, and acceptance criteria that gate on per-class
+recall rather than headline mAP.
+
+### Class reduction measured
+
+Retraining with the reduced scope, on a dataset engineered to sit inside the
+700–1,200 instances-per-class band (600 train / 120 val, 8 classes at ~970 instances
+each):
+
+| | Previous run | Reduced scope |
+|---|---|---|
+| Classes | 54 | 8 |
+| Images | 120 | 600 |
+| mAP50 after 1 epoch | — | **0.145** |
+| mAP50 after 8 epochs (whole previous run) | **0.0021** | — |
+
+A single epoch of the reduced-scope run beat the entire previous run by ~69×. Full
+curve in [`docs/AUDIT_v5.2.0.md`](docs/AUDIT_v5.2.0.md). Read it for what it is: the
+recipe and the class-reduction mechanism measured on *synthetic* imagery. It says nothing
+about real-world accuracy — what it establishes is that the bottleneck is data, not the
+pipeline, which is the question worth answering before spending four weeks photographing
+panels.
+
+### Still blocked on data, and two of the blockers are not code
+
+- **~3,500 public images exist in total**, ~5,300 instances, 6 classes viable. Public
+  data reaches roughly the 0.50 band on 6 classes; it cannot reach 0.85 on 15.
+- **`ROBOFLOW_API_KEY` is unset and the Roboflow connector's token has expired**, so
+  even those ~3,500 images cannot be downloaded from here. Needs re-authorization.
+- **`control-panel-azure/control-panels` has no generated version** — the best public
+  source of modular DIN-rail instances (~703 MCB boxes). Needs a fork and a version.
+- **~2,000–4,000 real panel photographs** are the actual answer. The capture protocol,
+  labelling guide, SAM2-refined pre-labelling and review loop are all built.
+
+785 tests passing (750 → 785; 35 new for profiles).
+
+## [5.4.0] — Verified by a real training run
+
+The pipeline was executed for real rather than reasoned about: torch 2.13 +
+ultralytics 8.4.110 installed, `yolo11n` trained for 8 epochs (250.7 s, CPU), exported
+to ONNX, verified, installed, and served through `POST /api/panel/analyze` at 70.9 ms
+per image. Full evidence table in
+[`docs/AUDIT_v5.2.0.md`](docs/AUDIT_v5.2.0.md).
+
+The resulting model is **not** in this repository. mAP50 of 0.0021 is the honest
+outcome for 8 epochs on 120 procedurally-generated images with a 54-class head; it is a
+pipeline-validation artifact, and shipping it as weights would be exactly the
+dishonesty the brief forbids.
+
+What the run proves matters more than the metric. With real weights loaded, the ONNX
+graph's maximum class score across all 8,400 anchors was 0.0011: the decoder extracted
+a real box, the gate rejected it as `below_unknown_floor`, the API returned
+`components: []`, and risk returned `unknown`/`assessable: false` rather than `low`.
+**The system declined to report rather than fabricate.** Lowering the gate produced 228
+genuine detections, every one demoted to `unknown_industrial_component` because class
+confidence never cleared a class threshold — the honest-unknown path working end to end.
+
+SAM2 was also validated with real weights (`sam2.1_b.pt`): a deliberately loose box
+`(225,125,365,310)` refined to `(249,149,333,285)` against a ground truth of
+`(250,150,330,280)` — within 5 px on every edge, 56% area reduction, guards accepted.
+
+### Six bugs the real run exposed
+
+None were findable without actually training a model.
+
+- **`runs/electrical/` did not exist.** Ultralytics resolves a relative `project` under
+  its own `runs_dir/<task>`, so artifacts landed in `runs/detect/runs/electrical/` —
+  not where the docs said, and not where `hpo.py` keeps its study database.
+  `TrainConfig` now passes an absolute path.
+- **`cli eval` corrupted its own JSON**, printing the human table to stdout before the
+  JSON — so the documented `cli eval > eval.json` → `cli export --eval-json` pipe could
+  never have worked. The table now goes to stderr.
+- **Ultralytics corrupted every JSON-emitting subcommand.** Its output goes to stdout
+  through a `logging` handler that captured the real `sys.stdout` at import time, which
+  `redirect_stdout` cannot reach. `train.quiet_stdout()` repoints those handlers.
+- **`api/annotations.py` could never load.** `from __future__ import annotations` sets
+  an attribute named `annotations` on the package, so `from . import annotations`
+  resolves to the `__future__` object rather than the submodule — and aliasing does not
+  help, because the attribute wins first. Renamed to `annotation_review.py`.
+- **Auto-annotation silently discarded every unclassified box** — 107 lost from 3
+  images on a measured run. It looked up a class index for
+  `unknown_industrial_component`, got `None` (that class is deliberately not
+  trainable), and dropped the box, while its docstring and manifest both claimed the
+  box had been written. Those are precisely the boxes that show where the model is
+  blind. They now go to a `.unclassified.json` sidecar, are surfaced for review, and
+  enter the export once a human names them.
+- **Installing ultralytics breaks OpenCV**: it pulls `opencv-python` alongside this
+  project's `opencv-python-headless`, and the shared `cv2` namespace loses
+  `CascadeClassifier`, breaking face detection. Documented in
+  `requirements-train.txt` with the fix.
+
+### New
+
+- **`training/electrical/quality.py`** + `cli quality` — the dataset checks that
+  otherwise train silently: unreadable images, unparseable labels, **class indices
+  outside the label space**, unnormalised (absolute-pixel) labels, degenerate and
+  whole-frame boxes, blur/exposure/resolution, and class balance. Exits non-zero on
+  unusable files. `--dst` writes a cleaned copy and quarantines rejects with reasons;
+  nothing is deleted. Low quality is a *warning*, kept by default — field panel
+  photography is badly lit by nature, and filtering on image statistics discards the
+  hardest and most valuable examples.
+- **CSV reports** — `reports_svc.panel_csv` (one row per device: class, confidence,
+  xyxy, position, row, manufacturer, part number, nameplate text) and
+  `panel_summary_csv` (panel, risk, BOM, missing, drivers, recommendations, limits).
+  Written through the `csv` module, so OCR text containing commas, quotes or newlines
+  is quoted instead of corrupting the row. `?csv=true&pdf=true` on `/api/panel/analyze`.
+- **`rtsp_backend/annotation_svc.py`** + `/api/annotations/*` — the human-correction
+  half of auto-annotation. Serves the worst-first review queue, records per-box
+  verdicts in the database (so a review survives a restart and two people can share a
+  batch), and re-exports corrected YOLO. Rejects a reclassification to a class id
+  outside the taxonomy. Excludes un-reviewed images from the export by default, and
+  excludes-and-lists anything a human flagged `needs_redraw` so it goes to a real
+  labelling tool rather than being fudged into the training set.
+- Root-level `*.pt` / `*.onnx` / `*.engine` and `datasets/` gitignored — Ultralytics
+  downloads pretrained checkpoints into the working directory on first use.
+
+### Tests
+
+688 → 750 passing. New suites for dataset quality (32) and CSV/annotation review (30);
+the HPO propagation tests were rewritten to exercise `train()`'s real exception handling
+via monkeypatch now that ultralytics is present, rather than skipping when it was absent.
+
 ## [5.3.0] — Closing the production gaps
 
 A full audit against the twelve-task production brief

@@ -5,7 +5,14 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from . import ai as ai_router
-from . import analysis, attendance, datasets, datasheets, employees, images, inspection
+# NOTE: the annotation-review router module is deliberately NOT named
+# `annotations.py`. `from __future__ import annotations` above sets an attribute named
+# `annotations` on this package module, and `from . import annotations` then resolves
+# to that __future__ _Feature object instead of importing the submodule — so the
+# router lookup fails at startup with a confusing AttributeError. Aliasing the import
+# does not help, because the attribute wins before the alias is applied.
+from . import analysis, annotation_review, attendance, datasets, datasheets, employees
+from . import images, inspection
 from . import panel_analyze, panels, reference, reference_panels, reports, training
 from .util import Context
 
@@ -29,6 +36,8 @@ def build_all_routers(ctx: Context) -> list[APIRouter]:
         # /api/panel/* — the component-detection contract. Additive: the plural
         # /api/panels/* router above keeps its richer response and PDF flow.
         panel_analyze.build_router(ctx),
+        # /api/annotations/* — human review of machine-generated labels.
+        annotation_review.build_router(ctx),
         inspection.build_router(ctx),
         reports.build_router(ctx),
     ]

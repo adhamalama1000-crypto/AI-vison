@@ -65,6 +65,7 @@ from training.electrical import refine as rf  # noqa: E402
 from training.electrical import split as splitter  # noqa: E402
 from training.electrical import synthetic as syn  # noqa: E402
 from training.electrical import train as tr  # noqa: E402
+from training.electrical import transfer as xf  # noqa: E402
 
 
 def _dump(obj) -> None:
@@ -137,6 +138,83 @@ def cmd_split(args) -> int:
         return 1
     _dump(report)
     return 0
+
+
+def cmd_scope(args) -> int:
+    """List class profiles, or filter a dataset down to one.
+
+    Named cmd_scope, not cmd_profile: cmd_profile is the runtime latency profiler
+    further down this file, and defining two functions with one name silently keeps
+    only the last.
+    """
+    from training.electrical import profiles as pf
+
+    if args.list or not args.src:
+        out = pf.list_profiles()
+        if args.name:
+            prof = pf.get(args.name)
+            out["selected"] = prof.to_dict()
+            out["requirement"] = pf.requirement_estimate(prof, args.target_map)
+        _dump(out)
+        if not args.src and not args.list:
+            _stderr("\n(no --src given, so nothing was filtered — pass --src and "
+                    "--dst to produce a profile dataset)")
+        return 0
+
+    if not args.dst:
+        _stderr("error: --dst is required with --src")
+        return 2
+    try:
+        prof = pf.get(args.name or pf.DEFAULT_PROFILE)
+    except KeyError as exc:
+        _stderr(f"error: {exc}")
+        return 2
+
+    if args.only_present:
+        present = pf.present_classes(args.src, prof,
+                                     min_instances=args.min_instances)
+        if not present:
+            _stderr(f"error: none of profile '{prof.name}'s classes have at least "
+                    f"{args.min_instances} instance(s) in {args.src}")
+            return 1
+        if len(present) < prof.class_count:
+            _stderr(f"narrowing '{prof.name}' from {prof.class_count} to "
+                    f"{len(present)} class(es) with data — an absent class adds a "
+                    f"zero to the mAP mean and nothing to the model")
+        prof = pf.derive(prof, present)
+
+    stats = pf.apply(args.src, args.dst, prof, drop_empty=args.drop_empty,
+                     symlink=args.symlink, log=_stderr)
+    stats["profile_detail"] = prof.to_dict()
+    stats["requirement"] = pf.requirement_estimate(prof, args.target_map)
+    _dump(stats)
+    for w in stats["warnings"]:
+        _stderr(f"\nwarning: {w}")
+    # No usable instances means the filter produced nothing trainable.
+    return 0 if stats["instances_kept"] else 1
+
+
+def cmd_quality(args) -> int:
+    """Structural and image-quality inspection of a dataset."""
+    from training.electrical import quality as ql
+
+    if args.dst:
+        out = ql.clean(args.root, args.dst,
+                       drop_warnings=tuple(args.drop_warnings or ()),
+                       quarantine=not args.no_quarantine, log=_stderr)
+        _dump(out)
+        report = out["quality_report"]
+    else:
+        rep = ql.inspect(args.root, check_pixels=not args.no_pixels,
+                         log=_stderr)
+        report = rep.to_dict()
+        _dump(report)
+
+    _stderr("\n" + report["verdict"])
+    for rec in report["recommendations"]:
+        _stderr(f"\n- {rec}")
+    # Unusable files are a hard failure: training on them wastes the run.
+    return 1 if report["fatal_count"] else 0
 
 
 def cmd_gap(args) -> int:
@@ -507,10 +585,13 @@ def cmd_eval(args) -> int:
     rep = tr.evaluate_backend(args.backend, args.root, args.split, params,
                               limit=args.limit)
     if rep.get("status") != "evaluated":
-        print(f"skipped: {rep.get('reason')}", file=sys.stderr)
+        _stderr(f"skipped: {rep.get('reason')}")
         _dump(rep)
         return 1
-    print(em.format_table(em.compare_models({args.backend: rep})))
+    # The table is for a human and goes to stderr; stdout stays pure JSON so that
+    # `cli eval ... > eval.json` is machine-readable. It previously went to stdout,
+    # which broke exactly the `--eval-json` pipe the export step documents.
+    _stderr(em.format_table(em.compare_models({args.backend: rep})))
     _dump(rep)
     return 0
 
@@ -543,6 +624,119 @@ def cmd_tune(args) -> int:
                "(POST /api/ai/models/components/params), or edit min_conf in "
                "rtsp_backend/electrical/taxonomy.py to make them the default.")})
     return 0
+
+
+# --------------------------------------------------------------------------
+# synthetic -> real domain transfer
+#
+# Four subcommands, named `mix` / `gap` is taken / `finetune` / `transfer`. The
+# function names are prefixed cmd_xf_* rather than reusing cmd_transfer-style names,
+# because a duplicate `def cmd_x` later in this module silently shadows the earlier one
+# and the failure surfaces as a missing argparse attribute, not as an import error.
+# --------------------------------------------------------------------------
+
+def cmd_xf_mix(args) -> int:
+    """Build a real+synthetic training set with a REAL-ONLY validation split."""
+    try:
+        rep = xf.build_mixed(args.real, args.synth, args.dst,
+                             synth_fraction=args.synth_fraction,
+                             seed=args.seed, symlink=not args.copy,
+                             log=_stderr)
+    except ValueError as exc:
+        _stderr(f"failed: {exc}")
+        _dump({"status": "failed", "reason": str(exc)})
+        return 1
+    rep["status"] = "built"
+    _dump(rep)
+    return 0
+
+
+def cmd_xf_domaingap(args) -> int:
+    """Score one checkpoint on synthetic and on real data, and name the gap."""
+    rep = xf.measure_domain_gap(args.weights, args.synth, args.real,
+                                split=args.split, imgsz=args.imgsz,
+                                device=args.device, log=_stderr)
+    if args.out:
+        _stderr(f"wrote {xf.write_result(rep, args.out)}")
+    _dump(rep)
+    return 0 if rep.get("real", {}).get("status") == "evaluated" else 1
+
+
+def cmd_xf_finetune(args) -> int:
+    """Fine-tune a checkpoint onto a new domain, optionally in two stages."""
+    rep = xf.fine_tune(args.data, args.init_from, arch=args.arch,
+                       epochs=args.epochs, imgsz=args.imgsz, batch=args.batch,
+                       device=args.device, staged=not args.no_staged,
+                       freeze_layers=args.freeze,
+                       stage1_epochs=args.stage1_epochs,
+                       lr0=args.lr0, name=args.name, log=_stderr)
+    if args.out:
+        _stderr(f"wrote {xf.write_result(rep, args.out)}")
+    _dump(rep)
+    return 0 if rep.get("status") == "completed" else 1
+
+
+def cmd_xf_compare(args) -> int:
+    """Train every transfer strategy and rank them on REAL validation data."""
+    rep = xf.compare_strategies(
+        args.real, args.synth, args.work_dir, strategies=tuple(args.strategies),
+        arch=args.arch, epochs=args.epochs,
+        synth_pretrain_epochs=args.synth_pretrain_epochs,
+        imgsz=args.imgsz, batch=args.batch, device=args.device,
+        synth_fraction=args.synth_fraction, synth_weights=args.synth_weights,
+        log=_stderr)
+    # Table to stderr, JSON to stdout, so `> comparison.json` stays parseable.
+    _stderr(xf.format_ranking(rep))
+    if rep.get("rationale"):
+        _stderr("\n" + rep["rationale"])
+    if args.out:
+        _stderr(f"\nwrote {xf.write_result(rep, args.out)}")
+    _dump(rep)
+    return 0 if rep.get("status") == "completed" else 1
+
+
+def cmd_xf_expand(args) -> int:
+    """Describe (or run) a staged class expansion, e.g. core8 -> core15."""
+    from training.electrical import profiles as pf
+
+    try:
+        plan = pf.expansion_plan(args.frm, args.to)
+    except KeyError as exc:
+        _stderr(str(exc))
+        return 1
+
+    _stderr(f"{args.frm} -> {args.to}: "
+            f"{plan['from_classes']} -> {plan['to_classes']} classes")
+    if plan["added"]:
+        _stderr(f"  adds: {', '.join(plan['added'])}")
+    if plan["removed"]:
+        _stderr(f"  drops: {', '.join(plan['removed'])}")
+    _stderr(f"  {plan['guidance']}")
+
+    if not args.data:
+        _dump(plan)
+        return 0
+
+    if not plan["index_stable"] and args.init_from:
+        # Refusing rather than warning. Carrying a checkpoint across a non-prefix
+        # profile change produces a model that loads without complaint and predicts
+        # the wrong labels — the failure would surface as bad inspection reports.
+        _stderr("refusing to fine-tune across a non-prefix profile change; "
+                "drop --init-from to train a fresh head instead")
+        plan["status"] = "refused"
+        _dump(plan)
+        return 1
+
+    rep = xf.fine_tune(args.data, args.init_from, arch=args.arch,
+                       epochs=args.epochs, imgsz=args.imgsz, batch=args.batch,
+                       device=args.device, staged=not args.no_staged,
+                       name=f"expand_{args.frm}_to_{args.to}", log=_stderr)
+    plan["training"] = rep
+    plan["status"] = rep.get("status")
+    if args.out:
+        _stderr(f"wrote {xf.write_result(plan, args.out)}")
+    _dump(plan)
+    return 0 if rep.get("status") == "completed" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -585,6 +779,51 @@ def build_parser() -> argparse.ArgumentParser:
                          "time.")
     ap.add_argument("--symlink", action="store_true")
     ap.set_defaults(func=cmd_split)
+
+    # Named 'scope' rather than 'profile': 'profile' is already the runtime
+    # latency/memory profiler, and that is the standard meaning of the word for a
+    # model. This one narrows the *class scope* of training.
+    ap = sub.add_parser("scope",
+                        help="list class profiles, or filter a dataset to one "
+                             "(fewer classes = more instances each = higher mAP)")
+    ap.add_argument("--list", action="store_true", help="list profiles and exit")
+    ap.add_argument("--name", help="profile name (default: core15)")
+    ap.add_argument("--src", help="canonically-labelled dataset root to filter")
+    ap.add_argument("--dst", help="output root for the profile dataset")
+    ap.add_argument("--drop-empty", action="store_true",
+                    help="also drop images left with no in-profile boxes. OFF by "
+                         "default: such an image is a genuine NEGATIVE for this "
+                         "profile, and negatives teach the detector not to fire on "
+                         "out-of-profile devices")
+    ap.add_argument("--symlink", action="store_true")
+    ap.add_argument("--only-present", action="store_true",
+                    help="narrow the profile to the classes that actually have data "
+                         "in --src. An absent class adds a zero to the mAP mean and "
+                         "nothing to the model, so reporting a 15-class mAP with 7 "
+                         "empty classes misleads in both directions")
+    ap.add_argument("--min-instances", type=int, default=1,
+                    help="with --only-present, the instance count a class needs to "
+                         "be kept")
+    ap.add_argument("--target-map", type=float, default=0.85,
+                    help="target mAP50 for the data-requirement estimate")
+    ap.set_defaults(func=cmd_scope)
+
+    ap = sub.add_parser("quality",
+                        help="corrupted files, bad labels, low-quality images, "
+                             "class balance; exits non-zero on unusable files")
+    ap.add_argument("--root", required=True)
+    ap.add_argument("--dst", help="write a cleaned dataset here (rejects go to "
+                                  "quarantine/, nothing is deleted)")
+    ap.add_argument("--drop-warnings", nargs="*",
+                    help="also drop files with these warning codes, e.g. blurred "
+                         "too_dark. OFF by default: a dim panel photograph is real "
+                         "deployment input, and filtering on image statistics throws "
+                         "away the hardest training examples")
+    ap.add_argument("--no-quarantine", action="store_true",
+                    help="do not keep copies of rejected files")
+    ap.add_argument("--no-pixels", action="store_true",
+                    help="structural/label checks only; skip image decoding")
+    ap.set_defaults(func=cmd_quality)
 
     ap = sub.add_parser("gap",
                         help="what is missing: classes, annotations, images")
@@ -636,7 +875,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="FP16 ONNX — GPU only, re-measure mAP after")
     ap.add_argument("--dynamic", action="store_true",
                     help="dynamic input shape (slower, more flexible)")
-    ap.add_argument("--data", help="dataset.yaml used, recorded in the model card")
+    ap.add_argument("--data",
+                    help="dataset.yaml the model was trained on. Recorded in the "
+                         "model card, and REQUIRED for a profile-trained model: the "
+                         "label space is read from it, otherwise the bundle defaults "
+                         "to the full 54-class taxonomy and its labels disagree with "
+                         "an N-class graph")
     ap.add_argument("--notes", help="free-text provenance for the model card")
     ap.add_argument("--run-dir",
                     help="Ultralytics run directory to harvest curves and the "
@@ -833,6 +1077,101 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--objective", default="f1", choices=["f1", "precision", "recall"])
     sp.add_argument("--min-precision", type=float, default=0.0)
     sp.set_defaults(func=cmd_tune)
+
+    # ---- synthetic -> real domain transfer ----
+    sp = sub.add_parser(
+        "mix", help="build a real+synthetic train split with REAL-ONLY validation")
+    sp.add_argument("--real", required=True,
+                    help="root of the real dataset (authoritative label space)")
+    sp.add_argument("--synth", required=True, help="root of the synthetic dataset")
+    sp.add_argument("--dst", required=True)
+    sp.add_argument("--synth-fraction", type=float,
+                    default=xf.DEFAULT_SYNTH_FRACTION,
+                    help="share of the TRAIN split allowed to be synthetic "
+                         f"(default {xf.DEFAULT_SYNTH_FRACTION}); val/test are real "
+                         "only regardless")
+    sp.add_argument("--seed", type=int, default=1234)
+    sp.add_argument("--copy", action="store_true",
+                    help="copy images instead of symlinking")
+    sp.set_defaults(func=cmd_xf_mix)
+
+    sp = sub.add_parser(
+        "domain-gap",
+        help="score a checkpoint on synthetic vs real data and name the gap")
+    sp.add_argument("--weights", required=True)
+    sp.add_argument("--synth", required=True)
+    sp.add_argument("--real", required=True)
+    sp.add_argument("--split", default="val")
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--out", help="also write the report to this path")
+    sp.set_defaults(func=cmd_xf_domaingap)
+
+    sp = sub.add_parser("finetune",
+                        help="fine-tune a checkpoint onto a new domain (staged)")
+    sp.add_argument("--data", required=True, help="dataset.yaml (real-validated)")
+    sp.add_argument("--init-from",
+                    help="checkpoint to start from; omit for COCO pretrained")
+    sp.add_argument("--arch", default="yolo11s")
+    sp.add_argument("--epochs", type=int, default=60)
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--batch", type=int, default=16)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--no-staged", action="store_true",
+                    help="train end-to-end instead of freeze-then-unfreeze")
+    sp.add_argument("--freeze", type=int, default=xf.BACKBONE_FREEZE_LAYERS,
+                    help="backbone layers to freeze in stage 1 "
+                         f"(default {xf.BACKBONE_FREEZE_LAYERS})")
+    sp.add_argument("--stage1-epochs", type=int,
+                    help="default is a third of --epochs")
+    sp.add_argument("--lr0", type=float, default=0.002,
+                    help="fine-tuning learning rate; stage 2 uses half of it")
+    sp.add_argument("--name", default="finetune")
+    sp.add_argument("--out", help="also write the report to this path")
+    sp.set_defaults(func=cmd_xf_finetune)
+
+    sp = sub.add_parser(
+        "transfer",
+        help="train every transfer strategy and rank them on REAL validation")
+    sp.add_argument("--real", required=True)
+    sp.add_argument("--synth", required=True)
+    sp.add_argument("--work-dir", default="runs/electrical/transfer")
+    sp.add_argument("--strategies", nargs="+",
+                    default=["real_only", "coco_to_synth_to_real", "mixed"],
+                    choices=sorted(xf.STRATEGIES))
+    sp.add_argument("--arch", default="yolo11s")
+    sp.add_argument("--epochs", type=int, default=40)
+    sp.add_argument("--synth-pretrain-epochs", type=int, default=20)
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--batch", type=int, default=16)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--synth-fraction", type=float,
+                    default=xf.DEFAULT_SYNTH_FRACTION)
+    sp.add_argument("--synth-weights",
+                    help="reuse an existing synthetic checkpoint instead of "
+                         "pretraining one for coco_to_synth_to_real")
+    sp.add_argument("--out", help="also write the comparison to this path")
+    sp.set_defaults(func=cmd_xf_compare)
+
+    sp = sub.add_parser(
+        "expand",
+        help="plan (or run) a staged class expansion, e.g. core8 -> core15")
+    sp.add_argument("--from", dest="frm", default="core8")
+    sp.add_argument("--to", default="core15")
+    sp.add_argument("--data",
+                    help="dataset.yaml scoped to the TARGET profile; omit to only "
+                         "print the plan")
+    sp.add_argument("--init-from",
+                    help="checkpoint from the source profile; refused when the "
+                         "expansion is not index-stable")
+    sp.add_argument("--arch", default="yolo11s")
+    sp.add_argument("--epochs", type=int, default=60)
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--batch", type=int, default=16)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--no-staged", action="store_true")
+    sp.add_argument("--out")
+    sp.set_defaults(func=cmd_xf_expand)
     return p
 
 

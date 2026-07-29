@@ -190,6 +190,10 @@ def build_router(ctx) -> APIRouter:
             True, description="Render and persist an annotated image."),
         persist: bool = Query(
             True, description="Record the analysis in the reports table."),
+        pdf: bool = Query(
+            False, description="Also render a PDF engineering report."),
+        csv: bool = Query(
+            False, description="Also write per-component and summary CSV reports."),
         min_confidence: float = Query(
             0.0, ge=0.0, le=1.0,
             description="Drop components below this confidence from the "
@@ -261,7 +265,30 @@ def build_router(ctx) -> APIRouter:
         if report:
             payload["report"] = _report_payload(result)
 
+        # -- exports ------------------------------------------------------
+        # Written whenever requested, independently of `persist`: a caller may want
+        # the files without a database row (an ad-hoc export), or a row without the
+        # files (a high-volume scan).
+        exports: dict = {}
+        if csv:
+            exports["csv_components"] = await asyncio.to_thread(
+                reports_svc.panel_csv, ctx.data_dir, result)
+            exports["csv_summary"] = await asyncio.to_thread(
+                reports_svc.panel_summary_csv, ctx.data_dir, result)
+        if pdf:
+            pdf_rel = await asyncio.to_thread(
+                reports_svc.panel_pdf, ctx.data_dir, result, annotated_rel)
+            if pdf_rel:
+                exports["pdf"] = pdf_rel
+            else:
+                payload["notes"].append(
+                    "PDF was requested but ReportLab is not installed, so none was "
+                    "written. pip install reportlab")
+
         if persist:
+            json_rel = reports_svc.write_json(ctx.data_dir, "reports", result,
+                                              "panel")
+            exports["json"] = json_rel
             summary = {
                 "component_total": len(components),
                 "component_counts": result.get("component_counts") or {},
@@ -269,19 +296,23 @@ def build_router(ctx) -> APIRouter:
                     [c for c in components if c["is_unknown"]]),
                 "mean_confidence": (result.get("confidence") or {}).get("mean"),
                 "panel_type": (result.get("panel") or {}).get("panel_type"),
+                "risk_level": ((result.get("report") or {})
+                               .get("risk_assessment") or {}).get("level"),
                 "model_loaded": payload["model"]["loaded"],
                 "source": source,
                 "annotated": annotated_rel,
                 "duration_ms": result.get("duration_ms"),
+                **{k: v for k, v in exports.items()},
             }
-            json_rel = reports_svc.write_json(ctx.data_dir, "reports", result,
-                                              "panel")
-            summary["json"] = json_rel
             payload["id"] = db.insert(
                 "INSERT INTO reports(kind,title,path,summary,created_at) "
                 "VALUES(?,?,?,?,?)",
-                ("panel_analysis", "Component Detection", json_rel,
+                ("panel_analysis", "Component Detection",
+                 exports.get("pdf") or json_rel,
                  json.dumps(summary), time.time()))
+
+        if exports:
+            payload["exports"] = exports
 
         return payload
 
