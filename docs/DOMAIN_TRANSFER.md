@@ -44,14 +44,26 @@ data is photorealistic and abundant — domain-randomised renders in the tens of
 thousands. Flat-shaded procedural panels are neither.
 
 So the comparison is run, not assumed. `cli transfer` trains each candidate and ranks
-them on the same real-only validation split:
+them on the same real-only validation split, **through the production path, at each
+strategy's own best operating point**:
 
 | Strategy | What it is |
 |---|---|
+| `synth_only` | Trained on synthetic alone, evaluated on real. **The zero-transfer baseline** — what shipping the synthetic model would actually deliver. Expected to lose badly; included because that loss is the number justifying the real-data programme. |
 | `real_only` | COCO → real. **The control.** If it wins, the synthetic data contributed nothing and the pipeline is simpler without it. |
-| `coco_to_real` | The same route named explicitly, for when someone says "just train on real data". |
-| `coco_to_synth_to_real` | The two-stage plan. Included because it *might* win. |
-| `mixed` | Synthetic images mixed into the real training set at a capped fraction (default 30%), validated on real only. Usually the best of the three when real data is scarce: the synthetic images add shape and layout variety without getting a vote on what a photograph looks like. |
+| `coco_to_synth_to_real` | Synthetic pretrain, then real fine-tune. The intuitive plan. Included because it *might* win. |
+| `coco_to_real` | The same route as `real_only`, named explicitly for when someone says "just train on real data". |
+| `mixed` | Synthetic images mixed into the real training set at a capped fraction (default 30%), validated on real only. Often the best when real data is scarce: the synthetic images add shape and layout variety without getting a vote on what a photograph looks like. |
+
+The default is the three-arm validation: `synth_only`, `real_only`,
+`coco_to_synth_to_real`. **The winner becomes the base model.** Do not expand the class
+set until this comparison has been run — a wider label space on top of an unvalidated
+transfer story just makes the result harder to attribute.
+
+Each strategy is scored at its own best threshold rather than at one fixed value.
+Comparing at a fixed threshold ranks models on where the default happened to land
+relative to their calibration, not on which one detects better — a well-calibrated model
+whose scores sit low would lose to a worse one for no real reason.
 
 The ranking reports `synthetic_data_helped` as an explicit boolean, and it requires the
 winner to beat the control by **more than 0.02 mAP@50** before it says yes. With a small
@@ -205,6 +217,91 @@ inserting a class in the middle silently invalidates every checkpoint trained on
 > was reordered so that `core8` is its prefix. `vfd` moved from profile index 9 to 7.
 > This was safe only because no `core15` model had been trained yet. Any future reorder
 > would not be.
+
+## Acceptance is decided on the production path
+
+`cli accept` is the gate. It evaluates through the registered component backend —
+same preprocessing, same `decode_floor`, same per-class thresholds, same NMS and
+cross-class suppression, same geometric plausibility gate as `POST /api/panel/analyze` —
+and sweeps the operating point so the threshold is a measurement rather than a default.
+
+```bash
+python -m training.electrical.cli accept \
+    --weights runs/electrical/<run>/weights/best.pt \
+    --root data/real --split val --imgsz 640 \
+    --confs 0.01 0.03 0.05 0.10 0.20 \
+    --objective f1 --max-fp-per-image 1.0 \
+    --target-map50 0.85 \
+    --out reports/acceptance.json --csv reports/sweep.csv
+```
+
+It reports, per operating point: production mAP@50, mAP@50-95, precision, recall, F1,
+TP/FP/FN, **false positives per image**, **false negatives per image**, and the number of
+predictions that were demoted to unknown. Then it picks the best point against
+`--objective` subject to any constraints, and prints per-class AP at that point.
+
+`--target-map50` makes the run **exit non-zero when the target is unmet**, so a CI job
+cannot pass by ignoring the shortfall.
+
+### Sweeping "confidence" means moving three gates, not one
+
+There are three thresholds in series and the highest one does the cutting:
+
+| Gate | Production default | Effect |
+|---|---|---|
+| `decode_floor` | 0.10 | Nothing below it is decoded at all |
+| `unknown_floor` | 0.18 | Below it nothing is kept, not even as unknown |
+| per-class `thresholds` | taxonomy `min_conf` | Below it a box is demoted to unknown rather than named |
+
+Lowering only `decode_floor` to 0.01 therefore measures nothing — `unknown_floor` at
+0.18 still discards everything beneath it, and 0.01/0.03/0.05/0.10 come back identical.
+That reads as a plateau in the model and is really a misconfigured harness.
+`production_params` moves all three together and pins `strictness` to 1.0, which is what
+a single "conf = 0.05" operating point has to mean. The per-class shape from the taxonomy
+is deliberately flattened during a sweep so the axis is one-dimensional; recover it
+afterwards with `cli tune`, which fits a threshold per class.
+
+### Why the FP count includes unknowns
+
+Lowering the threshold does not only add true positives. It adds boxes the gate cannot
+name, accepted as `unknown_industrial_component` — which matches no ground-truth class
+and so scores as a false positive. That is the honest behaviour (the alternative is
+inventing a label), but it means `fp_per_image` at a low threshold is partly unknowns
+rather than misclassifications. Every row reports `unknown_predictions` separately so the
+two causes stay distinguishable.
+
+### Choosing an objective
+
+F1 is the default, and it is the wrong choice if you have not thought about it. For an
+inspection report the errors are not symmetric: a false positive puts a device on a
+report that is not in the panel, costing an engineer a site visit to disprove, while a
+false negative is a gap a human reviewer can still catch. If that asymmetry matters, say
+so with `--min-precision` or `--max-fp-per-image` rather than trusting F1 to encode it.
+When no operating point satisfies the constraints, the report says so explicitly and
+flags the returned point as not acceptable rather than dropping the constraint silently.
+
+### What the first production-path run actually caught
+
+The first time the sweep ran, production recall came back at 0.245 against a training
+recall of 0.95. That ratio was the clue: 0.245 ≈ 2/8, and `core8` shares exactly two
+index positions with the 54-class taxonomy (`mcb` at 0, `mccb` at 1).
+
+`load_ground_truth` was reading YOLO label indices through `taxonomy.CLASS_ORDER`
+unconditionally. For a profile-scoped dataset, index 2 is `contactor`; in the taxonomy it
+is `acb`. So six of core8's eight classes were being compared against the wrong names.
+Nothing errored — labels loaded, evaluation ran, and the score came out low in a way that
+looked exactly like a weak model.
+
+Worth being precise about the blast radius: **this was an evaluation bug, not a serving
+bug.** Both serving paths were already correct — the Ultralytics backend reads `names`
+from the checkpoint, and the ONNX backend reads `classes.json` from the bundle. Live
+traffic would have been labelled correctly. What the bug would have done is make every
+acceptance decision wrong, by understating the model and misattributing the cause.
+
+`load_ground_truth` now reads the dataset's own `names` block via
+`dataset_label_space()` and falls back to the taxonomy only when a dataset declares no
+label space of its own. This is the class of defect that only a production-path
+evaluation surfaces, and it is the argument for making that path the acceptance gate.
 
 ## Two different mAP numbers, and which one to believe
 

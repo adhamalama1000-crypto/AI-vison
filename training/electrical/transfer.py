@@ -74,6 +74,12 @@ from . import train as tr
 
 #: Transfer strategies, described for the report so a reader knows what was compared.
 STRATEGIES: dict[str, str] = {
+    "synth_only": (
+        "Trained on synthetic data alone, evaluated on REAL data. The zero-transfer "
+        "baseline: it measures the domain gap as a ranked strategy rather than as a "
+        "separate report, and it is what shipping the synthetic model would actually "
+        "deliver. Expected to lose badly; included because that loss is the number "
+        "that justifies the whole real-data programme."),
     "real_only": (
         "COCO-pretrained backbone, fine-tuned on real images only. The control: if it "
         "matches or beats the others, the synthetic data contributed nothing and the "
@@ -117,6 +123,13 @@ class TransferResult:
     map_50_95: Optional[float] = None
     precision: Optional[float] = None
     recall: Optional[float] = None
+    #: The operating point these metrics were measured at, and the per-image error
+    #: rates there. All production-path figures, not trainer-reported ones.
+    conf: Optional[float] = None
+    fp_per_image: Optional[float] = None
+    fn_per_image: Optional[float] = None
+    production_sweep: list = field(default_factory=list)
+    operating_point: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -126,6 +139,11 @@ class TransferResult:
             "weights": self.weights,
             "map_50": self.map_50, "map_50_95": self.map_50_95,
             "precision": self.precision, "recall": self.recall,
+            "conf": self.conf,
+            "fp_per_image": self.fp_per_image,
+            "fn_per_image": self.fn_per_image,
+            "production_sweep": list(self.production_sweep),
+            "operating_point": dict(self.operating_point),
             "real_eval": self.real_eval, "baseline_eval": self.baseline_eval,
             "notes": list(self.notes),
         }
@@ -476,7 +494,7 @@ def fine_tune(dataset_yaml: str, init_from: Optional[str],
 
 def compare_strategies(real_root: str, synth_root: str, work_dir: str,
                        strategies: Sequence[str] = (
-                           "real_only", "coco_to_synth_to_real", "mixed"),
+                           "synth_only", "real_only", "coco_to_synth_to_real"),
                        arch: str = "yolo11s",
                        epochs: int = 40,
                        synth_pretrain_epochs: int = 20,
@@ -485,17 +503,35 @@ def compare_strategies(real_root: str, synth_root: str, work_dir: str,
                        device: str = "cpu",
                        synth_fraction: float = DEFAULT_SYNTH_FRACTION,
                        synth_weights: Optional[str] = None,
+                       score_confs: Optional[Sequence[float]] = None,
+                       objective: str = "f1",
+                       min_precision: Optional[float] = None,
+                       eval_limit: Optional[int] = None,
                        log: Optional[Callable[[str], None]] = None) -> dict:
     """Train each strategy on the same data and rank them on REAL validation.
 
-    Every strategy is scored on the same real-only validation split, which is the only
-    comparison that means anything. Returns a ranking plus the reasoning, including
-    whether the synthetic data helped at all — a question worth answering explicitly,
-    because the intuitive answer is often wrong.
+    Every strategy is scored on the same real-only validation split, **through the
+    deployed inference path**, at each strategy's own best operating point from a
+    confidence sweep. Three deliberate choices, each because the alternative misleads:
+
+    * Real-only validation, because a synth/real mix makes the number rise without the
+      model improving.
+    * The production path rather than the trainer's validator, because the trainer
+      scores at a ~0.001 confidence floor and the API does not — the two can differ by
+      a factor of four, and only one of them is the product.
+    * Each strategy at its own best threshold, because comparing at one fixed threshold
+      ranks models on where the default happened to land relative to their calibration
+      rather than on which detects better.
+
+    Returns a ranking plus the reasoning, including whether the synthetic data helped at
+    all — worth answering explicitly, because the intuitive answer is often wrong.
     """
+    from . import prodeval as pe
+
     say = log or (lambda m: None)
     os.makedirs(work_dir, exist_ok=True)
     results: dict[str, TransferResult] = {}
+    score_confs = tuple(score_confs) if score_confs else pe.OPERATING_POINTS
 
     # Real-only dataset (validation is already real; this just drops synthetic).
     real_only_root = os.path.join(work_dir, "real_only")
@@ -527,53 +563,96 @@ def compare_strategies(real_root: str, synth_root: str, work_dir: str,
                 f"unknown strategy; known: {', '.join(STRATEGIES)}")
             continue
 
-        if strategy in ("real_only", "coco_to_real"):
-            data_yaml = real_only_info["dataset_yaml"]
-            init = None
-        elif strategy == "mixed":
-            data_yaml = mixed_info["dataset_yaml"]
-            init = None
-        else:                                     # coco_to_synth_to_real
-            data_yaml = real_only_info["dataset_yaml"]
-            init = synth_weights
-            if not init:
-                say("  pretraining on synthetic data first")
-                pre = tr.TrainConfig(
+        if strategy == "synth_only":
+            # The zero-transfer arm: no real data touches training at all. It is still
+            # scored on the real split, because "how does the synthetic model do on
+            # real panels" is exactly the question this arm answers.
+            weights = synth_weights
+            stages: list[dict] = []
+            if not weights:
+                say("  training on synthetic data only")
+                so = tr.TrainConfig(
                     data=os.path.join(synth_root, "dataset.yaml"), arch=arch,
-                    epochs=synth_pretrain_epochs, imgsz=imgsz, batch=batch,
-                    device=device, name=f"transfer_{strategy}_pretrain")
-                pre_res = tr.train(pre, export_onnx=False, log=say)
-                if pre_res.status != "trained" or not pre_res.weights:
+                    epochs=max(epochs, synth_pretrain_epochs), imgsz=imgsz,
+                    batch=batch, device=device, name=f"transfer_{strategy}")
+                so_res = tr.train(so, export_onnx=False, log=say)
+                if so_res.status != "trained" or not so_res.weights:
                     results[strategy] = TransferResult(
                         strategy, "failed",
-                        f"synthetic pretraining did not train: {pre_res.reason}")
+                        f"synthetic training did not train: {so_res.reason}")
                     continue
-                init = pre_res.weights
+                weights = so_res.weights
+                stages = [{"stage": 1, "trained_on": "synthetic only",
+                           **so_res.to_dict()}]
+            ft = {"status": "completed", "weights": weights, "stages": stages}
+        else:
+            if strategy in ("real_only", "coco_to_real"):
+                data_yaml = real_only_info["dataset_yaml"]
+                init = None
+            elif strategy == "mixed":
+                data_yaml = mixed_info["dataset_yaml"]
+                init = None
+            else:                                 # coco_to_synth_to_real
+                data_yaml = real_only_info["dataset_yaml"]
+                init = synth_weights
+                if not init:
+                    say("  pretraining on synthetic data first")
+                    pre = tr.TrainConfig(
+                        data=os.path.join(synth_root, "dataset.yaml"), arch=arch,
+                        epochs=synth_pretrain_epochs, imgsz=imgsz, batch=batch,
+                        device=device, name=f"transfer_{strategy}_pretrain")
+                    pre_res = tr.train(pre, export_onnx=False, log=say)
+                    if pre_res.status != "trained" or not pre_res.weights:
+                        results[strategy] = TransferResult(
+                            strategy, "failed",
+                            f"synthetic pretraining did not train: "
+                            f"{pre_res.reason}")
+                        continue
+                    init = pre_res.weights
 
-        ft = fine_tune(data_yaml, init, arch=arch, epochs=epochs, imgsz=imgsz,
-                       batch=batch, device=device,
-                       name=f"transfer_{strategy}", log=say)
-        if ft["status"] != "completed":
-            results[strategy] = TransferResult(
-                strategy, "failed", ft.get("reason"), stages=ft.get("stages", []))
-            continue
+            ft = fine_tune(data_yaml, init, arch=arch, epochs=epochs, imgsz=imgsz,
+                           batch=batch, device=device,
+                           name=f"transfer_{strategy}", log=say)
+            if ft["status"] != "completed":
+                results[strategy] = TransferResult(
+                    strategy, "failed", ft.get("reason"),
+                    stages=ft.get("stages", []))
+                continue
 
-        # Score on REAL validation only — the same split for every strategy.
-        rep = tr.evaluate_backend(
-            "industrial_ultralytics", real_only_root, "val",
-            params={"weights": ft["weights"], "imgsz": imgsz, "device": device})
+        # Score on REAL validation only, through the PRODUCTION inference path, at each
+        # strategy's own best operating point. Comparing at one fixed threshold would
+        # pick a winner on where the default happened to fall rather than on which
+        # model is better — a strategy whose scores are well calibrated but shifted low
+        # loses to a worse one for no real reason.
+        sweep_rows = pe.sweep(ft["weights"], real_only_root, "val",
+                              confs=score_confs, imgsz=imgsz, device=device,
+                              limit=eval_limit, log=say)
+        point = pe.select_operating_point(sweep_rows, objective=objective,
+                                          min_precision=min_precision)
+        rep = next((r for r in sweep_rows
+                    if r.get("status") == "evaluated"
+                    and r.get("conf") == point.get("conf")), {})
         res = TransferResult(
             strategy, "completed", stages=ft["stages"], weights=ft["weights"],
             real_eval=rep)
+        res.production_sweep = sweep_rows
+        res.operating_point = point
         if rep.get("status") == "evaluated":
+            # prodeval rows are flat: precision/recall sit at the top level, not under
+            # an "overall" key the way evaluate_backend nests them.
             res.map_50 = rep.get("map_50")
             res.map_50_95 = rep.get("map_50_95")
-            res.precision = (rep.get("overall") or {}).get("precision")
-            res.recall = (rep.get("overall") or {}).get("recall")
+            res.precision = rep.get("precision")
+            res.recall = rep.get("recall")
+            res.conf = rep.get("conf")
+            res.fp_per_image = rep.get("fp_per_image")
+            res.fn_per_image = rep.get("fn_per_image")
             # recall can be absent even when mAP is present, so it is formatted
             # defensively — a crash here would throw away every strategy already trained.
             rec = f"{res.recall:.4f}" if res.recall is not None else "unavailable"
-            say(f"  real mAP@50 {res.map_50:.4f}  recall {rec}")
+            say(f"  REAL production mAP@50 {res.map_50:.4f} recall {rec} "
+                f"@ conf={res.conf} (FP/img {res.fp_per_image}, "
+                f"FN/img {res.fn_per_image})")
         results[strategy] = res
 
     return _rank(results, real_only_info, mixed_info, synth_fraction)
@@ -606,9 +685,17 @@ def _rank(results: Mapping, real_info: dict, mixed_info: Optional[dict],
         "ranking": [
             {"strategy": r.strategy, "map_50": r.map_50,
              "map_50_95": r.map_50_95, "precision": r.precision,
-             "recall": r.recall, "weights": r.weights}
+             "recall": r.recall, "conf": r.conf,
+             "fp_per_image": r.fp_per_image, "fn_per_image": r.fn_per_image,
+             "weights": r.weights}
             for r in scored
         ],
+        "metric_source": (
+            "Every figure here is production-path: measured through the registered "
+            "component backend with its gates, NMS and preprocessing, on REAL "
+            "validation images, at each strategy's own best operating point. These are "
+            "not the numbers Ultralytics printed during training and they will be "
+            "lower."),
         "winner": winner.strategy if winner else None,
         "winner_weights": winner.weights if winner else None,
         "synthetic_data_helped": synth_helped,
@@ -658,12 +745,15 @@ def format_ranking(comparison: dict) -> str:
     rows = comparison.get("ranking") or []
     if not rows:
         return "no scored strategies"
-    header = ("rank", "strategy", "mAP50", "mAP50-95", "precision", "recall")
-    body = [(str(i), r["strategy"],
-             f"{r['map_50']:.4f}" if r["map_50"] is not None else "-",
-             f"{r['map_50_95']:.4f}" if r["map_50_95"] is not None else "-",
-             f"{r['precision']:.4f}" if r["precision"] is not None else "-",
-             f"{r['recall']:.4f}" if r["recall"] is not None else "-")
+    header = ("rank", "strategy", "conf", "mAP50", "mAP50-95", "precision",
+              "recall", "FP/img", "FN/img")
+
+    def f(v, nd=4):
+        return f"{v:.{nd}f}" if isinstance(v, (int, float)) else "-"
+
+    body = [(str(i), r["strategy"], f(r.get("conf"), 2), f(r.get("map_50")),
+             f(r.get("map_50_95")), f(r.get("precision")), f(r.get("recall")),
+             f(r.get("fp_per_image"), 3), f(r.get("fn_per_image"), 3))
             for i, r in enumerate(rows, 1)]
     widths = [max(len(str(r[i])) for r in [header] + body)
               for i in range(len(header))]

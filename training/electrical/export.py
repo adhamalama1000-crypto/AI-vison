@@ -213,18 +213,55 @@ def parse_results_csv(path: str) -> dict:
     }
 
 
+def _acceptance_caveat(acceptance: Optional[dict]) -> str:
+    """The first caveat in every bundle: which number describes served behaviour."""
+    if not acceptance:
+        return ("NO production-path evaluation is attached to this bundle. The "
+                "headline figures come from the trainer's validator, which scores at "
+                "a ~0.001 confidence floor and does NOT apply the per-class gates, "
+                "NMS or plausibility checks the API applies — served accuracy is "
+                "normally substantially lower. Run `cli accept --weights ... --root "
+                "...` and re-export with --acceptance-json before treating any number "
+                "here as a production claim.")
+    best = acceptance.get("best_operating_point") or {}
+    verdict = acceptance.get("acceptance") or {}
+    bits = [
+        "Production-path evaluation IS attached; read `production_acceptance` in "
+        "preference to `headline`. It was measured through the deployed inference "
+        f"path at conf={best.get('conf')}: mAP@50 {best.get('map_50')}, precision "
+        f"{best.get('precision')}, recall {best.get('recall')}, "
+        f"{best.get('fp_per_image')} false positives and {best.get('fn_per_image')} "
+        "false negatives per image."
+    ]
+    if verdict:
+        bits.append(verdict.get("statement", ""))
+    if best.get("constraints_met") is False:
+        bits.append("The selected operating point does NOT satisfy the constraints "
+                    "that were requested.")
+    return " ".join(b for b in bits if b)
+
+
 def write_metrics_json(out_dir: str,
                        evaluation: Optional[dict] = None,
                        curves: Optional[dict] = None,
                        ultralytics_metrics: Optional[dict] = None,
                        runtime: Optional[dict] = None,
-                       provenance: Optional[dict] = None) -> str:
+                       provenance: Optional[dict] = None,
+                       acceptance: Optional[dict] = None) -> str:
     """Write the bundle's ``metrics.json``.
 
     One file holding everything needed to answer "how good is this model, and how
     do I know?": headline accuracy, per-class accuracy, the training curves, and the
     measured runtime cost. Absent sections are ``None`` rather than zero — a metric
     that was never measured must not read as a metric that measured badly.
+
+    ``acceptance`` is a report from :mod:`training.electrical.prodeval` — the
+    production-path sweep. It is kept separate from ``headline`` and given precedence in
+    the caveats because the two can differ by a large factor: Ultralytics validates at a
+    ~0.001 confidence floor while the served path gates at production thresholds. A
+    bundle shipping a training-time number as its accuracy claim overstates the model,
+    so when no acceptance report is present that absence is called out explicitly rather
+    than left for the reader to notice.
     """
     os.makedirs(out_dir, exist_ok=True)
     ev = evaluation or {}
@@ -245,7 +282,9 @@ def write_metrics_json(out_dir: str,
         "ultralytics_final_metrics": ultralytics_metrics or None,
         "runtime": runtime or None,
         "provenance": provenance or None,
+        "production_acceptance": acceptance or None,
         "caveats": [
+            _acceptance_caveat(acceptance),
             "A class absent from the validation split contributes nothing to mAP. "
             "Check the split report's classes_absent_from_val before reading the "
             "headline number as coverage.",
@@ -449,6 +488,7 @@ def export_bundle(weights: str, out_dir: str,
                   run_dir: Optional[str] = None,
                   evaluation: Optional[dict] = None,
                   runtime: Optional[dict] = None,
+                  acceptance: Optional[dict] = None,
                   plots: bool = True,
                   log: Optional[Callable[[str], None]] = None) -> dict:
     """Build a complete deployable bundle from an Ultralytics ``.pt`` checkpoint.
@@ -597,9 +637,21 @@ def export_bundle(weights: str, out_dir: str,
 
     result["files"]["metrics.json"] = write_metrics_json(
         out_dir, evaluation=evaluation, curves=curves or None,
-        ultralytics_metrics=None, runtime=runtime,
+        ultralytics_metrics=None, runtime=runtime, acceptance=acceptance,
         provenance={**(metadata or {}), "run_dir": resolved_run,
                     "weights_source": weights})
+    if not acceptance:
+        result["warnings"].append(
+            "No production-path acceptance report is attached. The accuracy figures in "
+            "this bundle come from the trainer's validator, which scores at a ~0.001 "
+            "confidence floor without the per-class gates, NMS or plausibility checks "
+            "the API applies, so served accuracy is normally substantially lower. Run "
+            "'cli accept' and re-export with --acceptance-json before quoting any "
+            "number here as a production claim.")
+    elif (acceptance.get("acceptance") or {}).get("passed") is False:
+        result["warnings"].append(
+            "The attached production-path evaluation did NOT meet its stated target: "
+            + (acceptance["acceptance"].get("statement") or ""))
     if not evaluation:
         result["warnings"].append(
             "metrics.json carries no measured accuracy because no evaluation was "

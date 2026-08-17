@@ -401,11 +401,58 @@ def collect_predictions(recognizer, image_dir: str,
     return out
 
 
+def dataset_label_space(dataset_root: str) -> Optional[dict]:
+    """Read ``index -> canonical class id`` from the dataset's own ``dataset.yaml``.
+
+    A profile-scoped dataset (anything produced by ``cli scope``) uses dense indices
+    0..N-1 that mean whatever its own ``names`` block says — for ``core8``, index 2 is
+    ``contactor``. The 54-class taxonomy says index 2 is ``acb``. Assuming the taxonomy
+    for every dataset therefore mislabels every class whose profile position differs
+    from its taxonomy position, and the failure is invisible: the labels load, the
+    evaluation runs, and the score is wrong in a way that looks like a weak model.
+
+    Returns None when there is no readable ``names`` block, leaving the caller to fall
+    back to the taxonomy.
+    """
+    path = os.path.join(dataset_root, "dataset.yaml")
+    if not os.path.exists(path):
+        return None
+    try:
+        import yaml
+
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh) or {}
+    except Exception:
+        return None
+
+    names = doc.get("names")
+    if isinstance(names, dict):
+        pairs = [(int(k), v) for k, v in names.items()]
+    elif isinstance(names, (list, tuple)):
+        pairs = list(enumerate(names))
+    else:
+        return None
+
+    out: dict[int, str] = {}
+    for idx, raw in pairs:
+        cid = tax.resolve(str(raw))
+        if cid:
+            out[idx] = cid
+    return out or None
+
+
 def load_ground_truth(dataset_root: str, split: str = "val") -> list[dict]:
-    """Read YOLO labels into metric-ready ground truth (absolute pixel boxes)."""
+    """Read YOLO labels into metric-ready ground truth (absolute pixel boxes).
+
+    Class indices are interpreted using the dataset's own label space when it declares
+    one, and only fall back to the taxonomy's ordering otherwise. See
+    :func:`dataset_label_space` for why that distinction is load-bearing.
+    """
     import cv2
 
-    inv = {v: k for k, v in tax.class_index().items()}
+    inv = dataset_label_space(dataset_root)
+    if inv is None:
+        inv = {v: k for k, v in tax.class_index().items()}
     img_dir = os.path.join(dataset_root, "images", split)
     lbl_dir = os.path.join(dataset_root, "labels", split)
     gts: list[dict] = []

@@ -642,6 +642,62 @@ def test_metrics_json_uses_none_for_unmeasured_not_zero(tmp_path):
     assert data["runtime"] is None
 
 
+def _acceptance(passed=True, conf=0.05, constraints_met=True):
+    return {
+        "best_operating_point": {
+            "conf": conf, "map_50": 0.72, "precision": 0.81, "recall": 0.64,
+            "fp_per_image": 0.4, "fn_per_image": 1.1,
+            "constraints_met": constraints_met,
+        },
+        "acceptance": {"passed": passed, "target_map_50": 0.70,
+                       "achieved_map_50": 0.72,
+                       "statement": "meets" if passed else "does NOT meet"},
+    }
+
+
+def test_metrics_json_without_acceptance_says_the_headline_is_not_a_production_claim(
+        tmp_path):
+    """The overstatement this guards against.
+
+    A bundle whose only accuracy figure comes from the trainer's validator can read as
+    a production claim. The trainer scores at a ~0.001 confidence floor with none of
+    the gates the API applies, so served accuracy is normally much lower -- and the
+    bundle has to say that itself rather than relying on the reader to know.
+    """
+    path = ex.write_metrics_json(str(tmp_path / "b"), evaluation=_evaluation())
+    data = json.load(open(path, encoding="utf-8"))
+    assert data["production_acceptance"] is None
+    first = data["caveats"][0]
+    assert "NO production-path evaluation" in first
+    assert "cli accept" in first
+
+
+def test_metrics_json_with_acceptance_points_the_reader_at_it(tmp_path):
+    path = ex.write_metrics_json(str(tmp_path / "b"), evaluation=_evaluation(),
+                                 acceptance=_acceptance())
+    data = json.load(open(path, encoding="utf-8"))
+    assert data["production_acceptance"]["best_operating_point"]["conf"] == 0.05
+    first = data["caveats"][0]
+    assert "read `production_acceptance` in preference to `headline`" in first
+    # The served figures, not the training ones, are the ones quoted.
+    assert "0.4 false positives" in first
+    assert "1.1" in first
+
+
+def test_metrics_json_caveat_reports_an_unmet_target(tmp_path):
+    path = ex.write_metrics_json(str(tmp_path / "b"),
+                                 acceptance=_acceptance(passed=False))
+    data = json.load(open(path, encoding="utf-8"))
+    assert "does NOT meet" in data["caveats"][0]
+
+
+def test_metrics_json_caveat_reports_unmet_constraints(tmp_path):
+    path = ex.write_metrics_json(str(tmp_path / "b"),
+                                 acceptance=_acceptance(constraints_met=False))
+    data = json.load(open(path, encoding="utf-8"))
+    assert "does NOT satisfy the constraints" in data["caveats"][0]
+
+
 def test_curves_are_plotted_when_matplotlib_is_available(tmp_path):
     run = str(tmp_path / "run")
     _ultralytics_run(run)

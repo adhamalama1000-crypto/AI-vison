@@ -12,6 +12,7 @@ replaces the first one.
 """
 
 import argparse
+import json
 
 import pytest
 
@@ -69,8 +70,8 @@ def test_the_pipeline_subcommands_are_all_present(parser):
         "labelguide", "export", "analyse-batch", "hpo", "verify", "tensorrt",
         "synth", "remap", "merge", "dedup", "analyse", "train", "bench",
         "profile", "eval", "tune",
-        # domain transfer
-        "mix", "domain-gap", "finetune", "transfer", "expand",
+        # domain transfer + production-path acceptance
+        "mix", "domain-gap", "finetune", "transfer", "expand", "accept",
     }
     missing = expected - names
     assert not missing, f"subcommands disappeared: {sorted(missing)}"
@@ -257,11 +258,125 @@ class TestDomainGapCommand:
         assert rc == 0
 
 
+class TestAcceptCommand:
+    """The acceptance gate. Its exit code is what a CI job keys on."""
+
+    def _stub(self, monkeypatch, best, acceptance=None, sweep=None):
+        from training.electrical import prodeval as pe
+
+        rep = {"sweep": sweep if sweep is not None else [
+                   {"conf": 0.05, "status": "evaluated", "map_50": 0.5,
+                    "map_50_95": 0.3, "precision": 0.6, "recall": 0.7, "f1": 0.65,
+                    "tp": 1, "fp": 1, "fn": 1, "fp_per_image": 0.1,
+                    "fn_per_image": 0.1, "unknown_predictions": 0,
+                    "is_production_default": False, "per_class": {}}],
+               "best_operating_point": best}
+        if acceptance:
+            rep["acceptance"] = acceptance
+        monkeypatch.setattr(pe, "acceptance_report", lambda *a, **k: rep)
+        return pe
+
+    def test_defaults_come_from_the_module(self, parser):
+        from training.electrical import prodeval as pe
+
+        a = parser.parse_args(["accept", "--weights", "w.pt", "--root", "r"])
+        assert a.func is cli.cmd_pe_acceptance
+        # None in the parser, resolved from the module in the handler, so the help
+        # text and the swept points cannot drift apart.
+        assert a.confs is None and a.backend is None
+        assert pe.OPERATING_POINTS == (0.01, 0.03, 0.05, 0.10, 0.20)
+
+    def test_it_sweeps_the_module_defaults_when_none_given(self, parser,
+                                                          monkeypatch):
+        from training.electrical import prodeval as pe
+
+        seen = {}
+
+        def fake(weights, root, split, **kw):
+            seen.update(kw)
+            return {"sweep": [], "best_operating_point": {"status": "failed",
+                                                          "reason": "x"}}
+
+        monkeypatch.setattr(pe, "acceptance_report", fake)
+        cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r"]))
+        assert seen["confs"] == pe.OPERATING_POINTS
+        assert seen["backend"] == pe.DEFAULT_BACKEND
+
+    def test_explicit_confs_are_used(self, parser, monkeypatch):
+        from training.electrical import prodeval as pe
+
+        seen = {}
+        monkeypatch.setattr(pe, "acceptance_report",
+                            lambda w, r, s, **kw: seen.update(kw) or {
+                                "sweep": [],
+                                "best_operating_point": {"status": "failed",
+                                                         "reason": "x"}})
+        cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r",
+             "--confs", "0.02", "0.5"]))
+        assert seen["confs"] == (0.02, 0.5)
+
+    def test_a_selected_point_exits_zero(self, parser, monkeypatch, capsys):
+        self._stub(monkeypatch, {"status": "selected", "conf": 0.05,
+                                 "rationale": "because"})
+        rc = cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r"]))
+        assert rc == 0
+        out = capsys.readouterr()
+        assert json.loads(out.out)["best_operating_point"]["conf"] == 0.05
+        assert "best operating point" in out.err
+
+    def test_no_selectable_point_exits_non_zero(self, parser, monkeypatch):
+        self._stub(monkeypatch, {"status": "failed", "reason": "nothing scored"})
+        rc = cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r"]))
+        assert rc == 1
+
+    def test_an_unmet_target_exits_non_zero(self, parser, monkeypatch, capsys):
+        # The point of --target-map50: CI must not pass by ignoring the shortfall.
+        self._stub(monkeypatch,
+                   {"status": "selected", "conf": 0.05, "rationale": "r"},
+                   acceptance={"passed": False, "statement": "does NOT meet"})
+        rc = cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r",
+             "--target-map50", "0.85"]))
+        assert rc == 1
+        assert "does NOT meet" in capsys.readouterr().err
+
+    def test_a_met_target_exits_zero(self, parser, monkeypatch):
+        self._stub(monkeypatch,
+                   {"status": "selected", "conf": 0.05, "rationale": "r"},
+                   acceptance={"passed": True, "statement": "meets"})
+        rc = cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r",
+             "--target-map50", "0.40"]))
+        assert rc == 0
+
+    def test_an_unmet_constraint_warning_reaches_stderr(self, parser, monkeypatch,
+                                                       capsys):
+        self._stub(monkeypatch, {"status": "selected", "conf": 0.05,
+                                 "rationale": "r",
+                                 "warning": "nothing met min_precision"})
+        cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r",
+             "--min-precision", "0.99"]))
+        assert "nothing met min_precision" in capsys.readouterr().err
+
+    def test_it_writes_json_and_csv_when_asked(self, parser, monkeypatch, tmp_path):
+        self._stub(monkeypatch, {"status": "selected", "conf": 0.05,
+                                 "rationale": "r"})
+        j, c = str(tmp_path / "a.json"), str(tmp_path / "s.csv")
+        cli.cmd_pe_acceptance(parser.parse_args(
+            ["accept", "--weights", "w.pt", "--root", "r", "--out", j,
+             "--csv", c]))
+        assert json.load(open(j))["best_operating_point"]["conf"] == 0.05
+        assert open(c).read().startswith("conf,status,map_50")
+
+
 class TestTransferCommand:
     def test_stdout_stays_parseable_json_with_the_table_on_stderr(
             self, parser, monkeypatch, capsys):
-        import json
-
         monkeypatch.setattr(cli.xf, "compare_strategies", lambda *a, **k: {
             "status": "completed", "winner": "mixed",
             "ranking": [{"strategy": "mixed", "map_50": 0.7,

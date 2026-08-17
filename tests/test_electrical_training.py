@@ -535,6 +535,91 @@ def test_load_ground_truth_reads_absolute_pixel_boxes(tmp_path):
         assert g["class_id"] in tax.SPECS
 
 
+def _profile_dataset(root, names, n=2):
+    """A profile-scoped dataset: dense indices 0..N-1 with its own names block."""
+    import cv2
+    import numpy as np
+
+    for split in ("val",):
+        img_d = os.path.join(root, "images", split)
+        lbl_d = os.path.join(root, "labels", split)
+        os.makedirs(img_d, exist_ok=True)
+        os.makedirs(lbl_d, exist_ok=True)
+        for i in range(n):
+            cv2.imwrite(os.path.join(img_d, f"p{i}.jpg"),
+                        np.full((100, 100, 3), 128, np.uint8))
+            with open(os.path.join(lbl_d, f"p{i}.txt"), "w",
+                      encoding="utf-8") as fh:
+                for idx in range(len(names)):
+                    fh.write(f"{idx} 0.5 0.5 0.2 0.2\n")
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write(f"path: {root}\ntrain: images/train\nval: images/val\n")
+        fh.write(f"nc: {len(names)}\nnames:\n")
+        for i, nm in enumerate(names):
+            fh.write(f"  {i}: {nm}\n")
+    return root
+
+
+CORE8_NAMES = ("mcb", "mccb", "contactor", "relay", "plc", "terminal_block",
+               "power_supply", "vfd")
+
+
+def test_ground_truth_uses_the_datasets_own_label_space(tmp_path):
+    """The bug this pins, which a production-path evaluation exposed.
+
+    A profile-scoped dataset's index 2 is ``contactor``; the 54-class taxonomy's index
+    2 is ``acb``. Reading label indices through the taxonomy therefore mislabelled every
+    class whose profile position differs from its taxonomy position -- 6 of core8's 8.
+    Nothing errored: the labels loaded, the evaluation ran, and recall came out at
+    almost exactly 2/8 because only mcb and mccb happen to share an index.
+    """
+    root = _profile_dataset(str(tmp_path / "core8"), CORE8_NAMES)
+    space = tr.dataset_label_space(root)
+    assert space == dict(enumerate(CORE8_NAMES))
+
+    got = {g["class_id"] for g in tr.load_ground_truth(root, "val")}
+    assert got == set(CORE8_NAMES)
+    # The taxonomy reading of these indices, which must NOT appear.
+    assert "acb" not in got and "rccb" not in got and "fuse_holder" not in got
+
+
+def test_ground_truth_falls_back_to_the_taxonomy_without_a_dataset_yaml(tmp_path):
+    root = _profile_dataset(str(tmp_path / "bare"), CORE8_NAMES)
+    os.remove(os.path.join(root, "dataset.yaml"))
+    assert tr.dataset_label_space(root) is None
+    got = {g["class_id"] for g in tr.load_ground_truth(root, "val")}
+    # Falls back to taxonomy order, which for indices 0..7 is a different set.
+    assert "acb" in got
+
+
+def test_label_space_accepts_a_list_names_block(tmp_path):
+    root = _profile_dataset(str(tmp_path / "listy"), CORE8_NAMES)
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write("names: [mcb, mccb, contactor]\n")
+    assert tr.dataset_label_space(root) == {0: "mcb", 1: "mccb", 2: "contactor"}
+
+
+def test_label_space_resolves_display_names(tmp_path):
+    root = _profile_dataset(str(tmp_path / "disp"), CORE8_NAMES)
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write("names:\n  0: MCB\n  1: Contactor\n")
+    assert tr.dataset_label_space(root) == {0: "mcb", 1: "contactor"}
+
+
+def test_label_space_ignores_unresolvable_names(tmp_path):
+    root = _profile_dataset(str(tmp_path / "junk"), CORE8_NAMES)
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write("names:\n  0: mcb\n  1: not_a_real_device_xyz\n")
+    assert tr.dataset_label_space(root) == {0: "mcb"}
+
+
+def test_label_space_returns_none_on_a_malformed_yaml(tmp_path):
+    root = _profile_dataset(str(tmp_path / "bad"), CORE8_NAMES)
+    with open(os.path.join(root, "dataset.yaml"), "w", encoding="utf-8") as fh:
+        fh.write("names: {{{ not yaml\n")
+    assert tr.dataset_label_space(root) is None
+
+
 def test_evaluate_backend_skips_cleanly_without_ground_truth(tmp_path):
     rep = tr.evaluate_backend("industrial_onnx", str(tmp_path))
     assert rep["status"] == "skipped"

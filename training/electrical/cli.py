@@ -259,22 +259,33 @@ def cmd_labelguide(args) -> int:
 
 
 def cmd_export(args) -> int:
-    evaluation = None
-    if args.eval_json:
+    def _read(path: str, flag: str):
+        """Returns (payload, error_code). A named flag pointing at an unreadable file
+        is an error, not a reason to silently export a bundle with no metrics."""
         try:
-            with open(args.eval_json, "r", encoding="utf-8") as fh:
-                evaluation = json.load(fh)
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh), None
         except (OSError, json.JSONDecodeError) as exc:
-            _stderr(f"error: could not read --eval-json {args.eval_json}: {exc}")
-            return 2
+            _stderr(f"error: could not read {flag} {path}: {exc}")
+            return None, 2
+
+    evaluation = acceptance = None
+    if args.eval_json:
+        evaluation, err = _read(args.eval_json, "--eval-json")
+        if err:
+            return err
+    if args.acceptance_json:
+        acceptance, err = _read(args.acceptance_json, "--acceptance-json")
+        if err:
+            return err
 
     res = ex.export_bundle(
         args.weights, args.out, imgsz=args.imgsz, opset=args.opset,
         simplify=not args.no_simplify, half=args.half, dynamic=args.dynamic,
         metadata={"data": args.data, "notes": args.notes} if
         (args.data or args.notes) else None,
-        run_dir=args.run_dir, evaluation=evaluation, plots=not args.no_plots,
-        log=_stderr)
+        run_dir=args.run_dir, evaluation=evaluation, acceptance=acceptance,
+        plots=not args.no_plots, log=_stderr)
     if res.get("status") != "exported":
         _dump(res)
         return 1
@@ -684,6 +695,8 @@ def cmd_xf_compare(args) -> int:
         synth_pretrain_epochs=args.synth_pretrain_epochs,
         imgsz=args.imgsz, batch=args.batch, device=args.device,
         synth_fraction=args.synth_fraction, synth_weights=args.synth_weights,
+        score_confs=args.confs, objective=args.objective,
+        min_precision=args.min_precision, eval_limit=args.eval_limit,
         log=_stderr)
     # Table to stderr, JSON to stdout, so `> comparison.json` stays parseable.
     _stderr(xf.format_ranking(rep))
@@ -693,6 +706,54 @@ def cmd_xf_compare(args) -> int:
         _stderr(f"\nwrote {xf.write_result(rep, args.out)}")
     _dump(rep)
     return 0 if rep.get("status") == "completed" else 1
+
+
+def cmd_pe_acceptance(args) -> int:
+    """Production-path evaluation with a confidence sweep. The acceptance gate."""
+    from training.electrical import prodeval as pe
+
+    # Defaults resolved from the module rather than repeated in the parser, so the
+    # help text and the measured points cannot drift apart.
+    confs = tuple(args.confs) if args.confs else pe.OPERATING_POINTS
+    backend = args.backend or pe.DEFAULT_BACKEND
+
+    rep = pe.acceptance_report(
+        args.weights, args.root, args.split,
+        confs=confs, imgsz=args.imgsz, device=args.device,
+        backend=backend, limit=args.limit, objective=args.objective,
+        min_precision=args.min_precision, min_recall=args.min_recall,
+        max_fp_per_image=args.max_fp_per_image,
+        target_map50=args.target_map50, log=_stderr)
+
+    # Tables and prose to stderr; stdout stays pure JSON so `> acceptance.json` works.
+    _stderr("\n" + pe.format_sweep(rep["sweep"]))
+    best = rep["best_operating_point"]
+    if best.get("status") == "selected":
+        _stderr(f"\nbest operating point: conf={best['conf']}")
+        _stderr(best["rationale"])
+        if best.get("warning"):
+            _stderr("\nWARNING: " + best["warning"])
+        row = next((r for r in rep["sweep"]
+                    if r.get("conf") == best["conf"]), None)
+        if row:
+            _stderr("\nper-class at the selected point:")
+            _stderr(pe.per_class_table(row))
+    else:
+        _stderr(f"\nno operating point selected: {best.get('reason')}")
+    if rep.get("acceptance"):
+        _stderr("\n" + rep["acceptance"]["statement"])
+    if args.out:
+        _stderr(f"\nwrote {pe.write_report(rep, args.out)}")
+    if args.csv:
+        _stderr(f"wrote {pe.write_sweep_csv(rep['sweep'], args.csv)}")
+
+    _dump(rep)
+    if best.get("status") != "selected":
+        return 1
+    # A stated target that is not met is a failure, so CI cannot pass by ignoring it.
+    if rep.get("acceptance") and not rep["acceptance"]["passed"]:
+        return 1
+    return 0
 
 
 def cmd_xf_expand(args) -> int:
@@ -890,6 +951,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="JSON from 'cli eval', recorded into metrics.json. "
                          "Without it the bundle carries no accuracy evidence and "
                          "cannot be audited later.")
+    ap.add_argument("--acceptance-json",
+                    help="JSON from 'cli accept' — the production-path sweep. This is "
+                         "the number that describes served behaviour; without it the "
+                         "bundle's accuracy claim is a trainer-validator figure "
+                         "measured at a ~0.001 confidence floor, and metrics.json "
+                         "says so.")
     ap.add_argument("--no-plots", action="store_true",
                     help="skip rendering curves/confusion matrix for anything "
                          "Ultralytics did not already plot")
@@ -1137,8 +1204,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--synth", required=True)
     sp.add_argument("--work-dir", default="runs/electrical/transfer")
     sp.add_argument("--strategies", nargs="+",
-                    default=["real_only", "coco_to_synth_to_real", "mixed"],
-                    choices=sorted(xf.STRATEGIES))
+                    default=["synth_only", "real_only",
+                             "coco_to_synth_to_real"],
+                    choices=sorted(xf.STRATEGIES),
+                    help="default is the three-way domain-transfer validation: "
+                         "synthetic only, real only, synthetic pretrain + real "
+                         "fine-tune")
     sp.add_argument("--arch", default="yolo11s")
     sp.add_argument("--epochs", type=int, default=40)
     sp.add_argument("--synth-pretrain-epochs", type=int, default=20)
@@ -1149,9 +1220,48 @@ def build_parser() -> argparse.ArgumentParser:
                     default=xf.DEFAULT_SYNTH_FRACTION)
     sp.add_argument("--synth-weights",
                     help="reuse an existing synthetic checkpoint instead of "
-                         "pretraining one for coco_to_synth_to_real")
+                         "pretraining one for coco_to_synth_to_real / synth_only")
+    sp.add_argument("--confs", nargs="+", type=float, default=None,
+                    help="operating points swept when scoring each strategy on the "
+                         "production path (default: 0.01 0.03 0.05 0.10 0.20)")
+    sp.add_argument("--objective", default="f1",
+                    choices=["f1", "map_50", "precision", "recall"],
+                    help="what each strategy's operating point maximises")
+    sp.add_argument("--min-precision", type=float)
+    sp.add_argument("--eval-limit", type=int,
+                    help="evaluate only the first N real images per sweep point")
     sp.add_argument("--out", help="also write the comparison to this path")
     sp.set_defaults(func=cmd_xf_compare)
+
+    sp = sub.add_parser(
+        "accept",
+        help="production-path evaluation + confidence sweep (the acceptance gate)")
+    sp.add_argument("--weights", required=True)
+    sp.add_argument("--root", required=True,
+                    help="dataset root; use the REAL one for an acceptance decision")
+    sp.add_argument("--split", default="val")
+    sp.add_argument("--backend", default=None,
+                    help="registered components backend "
+                         "(default: the .pt production backend)")
+    sp.add_argument("--confs", nargs="+", type=float, default=None,
+                    help="operating points to sweep "
+                         "(default: 0.01 0.03 0.05 0.10 0.20)")
+    sp.add_argument("--imgsz", type=int, default=640)
+    sp.add_argument("--device", default="cpu")
+    sp.add_argument("--limit", type=int, help="evaluate only the first N images")
+    sp.add_argument("--objective", default="f1",
+                    choices=["f1", "map_50", "precision", "recall"],
+                    help="what to maximise when picking the operating point")
+    sp.add_argument("--min-precision", type=float,
+                    help="constraint: reject operating points below this precision")
+    sp.add_argument("--min-recall", type=float)
+    sp.add_argument("--max-fp-per-image", type=float,
+                    help="constraint: reject operating points above this FP rate")
+    sp.add_argument("--target-map50", type=float,
+                    help="stated acceptance target; exits non-zero if unmet")
+    sp.add_argument("--out", help="write the full JSON report here")
+    sp.add_argument("--csv", help="write the sweep as CSV here")
+    sp.set_defaults(func=cmd_pe_acceptance)
 
     sp = sub.add_parser(
         "expand",
