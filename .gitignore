@@ -23,6 +23,11 @@ models/**/labels.txt
 models/**/model_card.json
 runs/
 outputs/
+# Export bundles: `cli export --out dist/<name>` writes best.pt + best.onnx there
+# (~57MB for an 8-class yolo11s). Build output, reproducible from runs/ at any time.
+# The small audit records that matter — the acceptance sweep and the evaluation JSON —
+# are committed under reports/ instead.
+dist/
 # Ultralytics downloads pretrained checkpoints into the CURRENT WORKING DIRECTORY on
 # first use (yolo11n.pt, sam2.1_b.pt, ...). They are multi-megabyte binaries fetched
 # on demand, never repository content.

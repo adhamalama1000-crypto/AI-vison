@@ -719,11 +719,52 @@ def verify_bundle(bundle_dir: str) -> dict:
                 f"existing indices are correct and the newer classes simply "
                 f"cannot be detected by this checkpoint.")
         else:
-            problems.append(
-                f"bundle label order does not match the taxonomy and is not a "
-                f"prefix of it. Indices would be misinterpreted at runtime. "
-                f"Bundle: {expected[:5]}... Taxonomy: "
-                f"{list(tax.CLASS_ORDER[:5])}...")
+            # A profile-scoped bundle (core8, core15, ...) legitimately has its own
+            # dense label order, and that is safe *because the bundle ships the label
+            # space*: the runtime's load_class_map prefers classes.json, then
+            # labels.txt, and only falls back to the taxonomy when neither is present.
+            #
+            # `expected` is derived from those very files, so reaching this branch
+            # already proves one of them exists — which is precisely the case where a
+            # non-taxonomy order is harmless. Flagging it as a problem here failed every
+            # profile-scoped export, and a check that fires on correct bundles trains
+            # people to ignore it. The genuine failure (no label file, so the runtime
+            # falls back to the taxonomy) is reported separately above.
+            # A label order that is neither the taxonomy nor a prefix of it cannot be
+            # validated from the bundle alone: it is correct if it truthfully describes
+            # the checkpoint's head, and mislabels every detection if it does not. Both
+            # cases are self-consistent on disk, so the discriminator used here is
+            # whether the order matches a *registered profile* — a recognised,
+            # deliberate scope — rather than being an arbitrary permutation.
+            matched = None
+            try:
+                from . import profiles as pf
+
+                for name, prof in pf.PROFILES.items():
+                    if list(prof.classes) == list(expected):
+                        matched = name
+                        break
+            except Exception:
+                matched = None
+
+            if matched:
+                info["taxonomy_note"] = (
+                    f"bundle declares the '{matched}' profile's {len(expected)}-class "
+                    f"label space rather than the taxonomy's order. That is safe: the "
+                    f"runtime reads classes.json/labels.txt in preference to the "
+                    f"taxonomy and this bundle ships it, so indices are the bundle's "
+                    f"own. Serve it only against this label space.")
+                info["label_space_profile"] = matched
+            else:
+                problems.append(
+                    f"bundle label order is neither the taxonomy, a prefix of it, nor "
+                    f"any registered profile. It cannot be validated from the bundle "
+                    f"alone — if it does not truthfully describe the checkpoint's head, "
+                    f"every detection is mislabelled and nothing would report an error. "
+                    f"Register the scope as a profile, or re-export from a checkpoint "
+                    f"trained on a known label space. "
+                    f"Bundle: {expected[:5]}... Taxonomy: "
+                    f"{list(tax.CLASS_ORDER[:5])}...")
 
     onnx_path = os.path.join(bundle_dir, "best.onnx")
     if os.path.exists(onnx_path) and expected:

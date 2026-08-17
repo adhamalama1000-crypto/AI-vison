@@ -1,0 +1,992 @@
+{
+  "iou_threshold": 0.5,
+  "overall": {
+    "tp": 850,
+    "fp": 1474,
+    "fn": 430,
+    "precision": 0.3657,
+    "recall": 0.6641,
+    "f1": 0.4717
+  },
+  "map_50": 0.4912,
+  "map_50_95": 0.4633,
+  "map_by_iou": {
+    "0.50": 0.4912,
+    "0.55": 0.4912,
+    "0.60": 0.4912,
+    "0.65": 0.4912,
+    "0.70": 0.4912,
+    "0.75": 0.4905,
+    "0.80": 0.4866,
+    "0.85": 0.4751,
+    "0.90": 0.4381,
+    "0.95": 0.2867
+  },
+  "per_class": {
+    "contactor": {
+      "tp": 137,
+      "fp": 125,
+      "fn": 27,
+      "precision": 0.5229,
+      "recall": 0.8354,
+      "f1": 0.6432,
+      "ap": 0.4595,
+      "support": 164,
+      "name": "Contactor"
+    },
+    "mcb": {
+      "tp": 79,
+      "fp": 92,
+      "fn": 77,
+      "precision": 0.462,
+      "recall": 0.5064,
+      "f1": 0.4832,
+      "ap": 0.2885,
+      "support": 156,
+      "name": "MCB (Miniature Circuit Breaker)"
+    },
+    "mccb": {
+      "tp": 158,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.9875,
+      "recall": 0.9937,
+      "f1": 0.9906,
+      "ap": 0.9935,
+      "support": 159,
+      "name": "MCCB (Moulded Case Circuit Breaker)"
+    },
+    "plc": {
+      "tp": 46,
+      "fp": 35,
+      "fn": 101,
+      "precision": 0.5679,
+      "recall": 0.3129,
+      "f1": 0.4035,
+      "ap": 0.2294,
+      "support": 147,
+      "name": "PLC (Programmable Logic Controller)"
+    },
+    "power_supply": {
+      "tp": 138,
+      "fp": 141,
+      "fn": 16,
+      "precision": 0.4946,
+      "recall": 0.8961,
+      "f1": 0.6374,
+      "ap": 0.5588,
+      "support": 154,
+      "name": "Switch-Mode Power Supply"
+    },
+    "relay": {
+      "tp": 28,
+      "fp": 57,
+      "fn": 144,
+      "precision": 0.3294,
+      "recall": 0.1628,
+      "f1": 0.2179,
+      "ap": 0.077,
+      "support": 172,
+      "name": "Control Relay"
+    },
+    "terminal_block": {
+      "tp": 166,
+      "fp": 3,
+      "fn": 9,
+      "precision": 0.9822,
+      "recall": 0.9486,
+      "f1": 0.9651,
+      "ap": 0.9469,
+      "support": 175,
+      "name": "Terminal Block"
+    },
+    "unknown_industrial_component": {
+      "tp": 0,
+      "fp": 919,
+      "fn": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "ap": 0.0,
+      "support": 0,
+      "name": "Unknown Industrial Component"
+    },
+    "vfd": {
+      "tp": 98,
+      "fp": 100,
+      "fn": 55,
+      "precision": 0.4949,
+      "recall": 0.6405,
+      "f1": 0.5584,
+      "ap": 0.3761,
+      "support": 153,
+      "name": "VFD (Variable Frequency Drive)"
+    }
+  },
+  "macro_precision": 0.6052,
+  "macro_recall": 0.6621,
+  "false_positive_analysis": {
+    "total": 1474,
+    "by_cause": {
+      "spurious_detection": 1132,
+      "localisation": 2,
+      "class_confusion": 340
+    },
+    "worst_offenders": [
+      {
+        "class_id": "unknown_industrial_component",
+        "name": "Unknown Industrial Component",
+        "false_positives": 919
+      },
+      {
+        "class_id": "power_supply",
+        "name": "Switch-Mode Power Supply",
+        "false_positives": 141
+      },
+      {
+        "class_id": "contactor",
+        "name": "Contactor",
+        "false_positives": 125
+      },
+      {
+        "class_id": "vfd",
+        "name": "VFD (Variable Frequency Drive)",
+        "false_positives": 100
+      },
+      {
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "false_positives": 92
+      }
+    ],
+    "examples": [
+      {
+        "image_id": "val_000082",
+        "class_id": "power_supply",
+        "box": [
+          523.9104614257812,
+          294.8639831542969,
+          545.6329956054688,
+          358.5060729980469
+        ],
+        "score": 0.9210750460624695,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000051",
+        "class_id": "power_supply",
+        "box": [
+          422.1012878417969,
+          409.8541259765625,
+          476.72088623046875,
+          452.76092529296875
+        ],
+        "score": 0.9186925292015076,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000071",
+        "class_id": "power_supply",
+        "box": [
+          517.6312255859375,
+          70.95105743408203,
+          556.3815307617188,
+          123.9681396484375
+        ],
+        "score": 0.8903407454490662,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000038",
+        "class_id": "power_supply",
+        "box": [
+          338.78546142578125,
+          128.11654663085938,
+          367.97882080078125,
+          186.4787139892578
+        ],
+        "score": 0.8844952583312988,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000064",
+        "class_id": "power_supply",
+        "box": [
+          136.30821228027344,
+          50.56856155395508,
+          168.0690155029297,
+          107.91385650634766
+        ],
+        "score": 0.8777369260787964,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000051",
+        "class_id": "power_supply",
+        "box": [
+          378.91485595703125,
+          335.6650390625,
+          416.4738464355469,
+          391.4494934082031
+        ],
+        "score": 0.8703858256340027,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000026",
+        "class_id": "power_supply",
+        "box": [
+          339.2196960449219,
+          301.3538818359375,
+          371.2012939453125,
+          372.9266357421875
+        ],
+        "score": 0.8675980567932129,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000021",
+        "class_id": "power_supply",
+        "box": [
+          278.4995422363281,
+          217.0750732421875,
+          306.04058837890625,
+          290.2662353515625
+        ],
+        "score": 0.8669708371162415,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000014",
+        "class_id": "vfd",
+        "box": [
+          158.39732360839844,
+          332.35882568359375,
+          184.41455078125,
+          393.9856262207031
+        ],
+        "score": 0.8656206130981445,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000029",
+        "class_id": "terminal_block",
+        "box": [
+          99.26422119140625,
+          207.71388244628906,
+          177.46920776367188,
+          256.482421875
+        ],
+        "score": 0.8630377650260925,
+        "best_overlap_class": "terminal_block",
+        "best_overlap_iou": 0.3545,
+        "cause": "localisation"
+      },
+      {
+        "image_id": "val_000026",
+        "class_id": "power_supply",
+        "box": [
+          271.79205322265625,
+          403.58001708984375,
+          320.15728759765625,
+          449.9273681640625
+        ],
+        "score": 0.8626887798309326,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000037",
+        "class_id": "power_supply",
+        "box": [
+          33.37445831298828,
+          253.41590881347656,
+          92.11625671386719,
+          315.6645812988281
+        ],
+        "score": 0.8619105219841003,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000110",
+        "class_id": "power_supply",
+        "box": [
+          152.18658447265625,
+          46.63442611694336,
+          185.4998016357422,
+          102.0
+        ],
+        "score": 0.8520739078521729,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000103",
+        "class_id": "mcb",
+        "box": [
+          99.68570709228516,
+          54.69589614868164,
+          119.96318817138672,
+          146.93931579589844
+        ],
+        "score": 0.8449048399925232,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000076",
+        "class_id": "power_supply",
+        "box": [
+          321.1958312988281,
+          115.20196533203125,
+          347.39776611328125,
+          172.26318359375
+        ],
+        "score": 0.8418556451797485,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000105",
+        "class_id": "power_supply",
+        "box": [
+          556.595458984375,
+          208.28700256347656,
+          582.4760131835938,
+          277.6453857421875
+        ],
+        "score": 0.8407794833183289,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000013",
+        "class_id": "power_supply",
+        "box": [
+          87.2186050415039,
+          372.2133483886719,
+          109.4268569946289,
+          442.6970520019531
+        ],
+        "score": 0.8375048637390137,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000103",
+        "class_id": "power_supply",
+        "box": [
+          261.3805236816406,
+          163.85760498046875,
+          293.1340637207031,
+          259.23419189453125
+        ],
+        "score": 0.8257949948310852,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000089",
+        "class_id": "power_supply",
+        "box": [
+          130.46560668945312,
+          321.5592956542969,
+          194.5978546142578,
+          383.3125915527344
+        ],
+        "score": 0.8161952495574951,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "power_supply",
+        "box": [
+          305.38165283203125,
+          57.15132522583008,
+          371.2033386230469,
+          116.44589233398438
+        ],
+        "score": 0.8071810603141785,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000037",
+        "class_id": "power_supply",
+        "box": [
+          135.7537841796875,
+          261.32391357421875,
+          185.47877502441406,
+          305.5034484863281
+        ],
+        "score": 0.8063898086547852,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000045",
+        "class_id": "power_supply",
+        "box": [
+          191.04380798339844,
+          214.37705993652344,
+          229.95333862304688,
+          287.20745849609375
+        ],
+        "score": 0.8046025633811951,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000044",
+        "class_id": "power_supply",
+        "box": [
+          274.8708801269531,
+          260.30462646484375,
+          318.8435974121094,
+          316.55938720703125
+        ],
+        "score": 0.7888534665107727,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000000",
+        "class_id": "power_supply",
+        "box": [
+          191.2803192138672,
+          194.85964965820312,
+          253.11233520507812,
+          234.489013671875
+        ],
+        "score": 0.7826449871063232,
+        "best_overlap_class": null,
+        "best_overlap_iou": 0.0,
+        "cause": "spurious_detection"
+      },
+      {
+        "image_id": "val_000063",
+        "class_id": "mccb",
+        "box": [
+          90.11964416503906,
+          381.27996826171875,
+          123.68535614013672,
+          439.15618896484375
+        ],
+        "score": 0.7824445366859436,
+        "best_overlap_class": "mccb",
+        "best_overlap_iou": 0.3629,
+        "cause": "localisation"
+      }
+    ]
+  },
+  "false_negative_analysis": {
+    "total": 430,
+    "by_class": {
+      "Control Relay": 144,
+      "PLC (Programmable Logic Controller)": 101,
+      "MCB (Miniature Circuit Breaker)": 77,
+      "VFD (Variable Frequency Drive)": 55,
+      "Contactor": 27,
+      "Switch-Mode Power Supply": 16,
+      "Terminal Block": 9,
+      "MCCB (Moulded Case Circuit Breaker)": 1
+    },
+    "examples": [
+      {
+        "image_id": "val_000000",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          301.67872,
+          78.46440000000001,
+          363.49248,
+          141.55704
+        ]
+      },
+      {
+        "image_id": "val_000000",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          482.47968000000003,
+          172.53936000000002,
+          522.70048,
+          257.68176000000005
+        ]
+      },
+      {
+        "image_id": "val_000000",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          52.58432,
+          276.11496,
+          73.59039999999999,
+          341.79768
+        ]
+      },
+      {
+        "image_id": "val_000002",
+        "class_id": "relay",
+        "name": "Control Relay",
+        "box": [
+          75.99968000000001,
+          97.00008,
+          113.0,
+          156.00024
+        ]
+      },
+      {
+        "image_id": "val_000002",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          476.00032000000004,
+          240.00024,
+          499.00000000000006,
+          295.00007999999997
+        ]
+      },
+      {
+        "image_id": "val_000002",
+        "class_id": "plc",
+        "name": "PLC (Programmable Logic Controller)",
+        "box": [
+          267.00032,
+          346.99992,
+          332.0,
+          469.00008
+        ]
+      },
+      {
+        "image_id": "val_000002",
+        "class_id": "contactor",
+        "name": "Contactor",
+        "box": [
+          439.00032,
+          359.00016,
+          515.00032,
+          446.00016
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "terminal_block",
+        "name": "Terminal Block",
+        "box": [
+          84.10272,
+          148.91016000000002,
+          93.09152,
+          162.74712
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "vfd",
+        "name": "VFD (Variable Frequency Drive)",
+        "box": [
+          105.08352,
+          128.84568,
+          149.43168,
+          185.3604
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "relay",
+        "name": "Control Relay",
+        "box": [
+          199.05695999999998,
+          196.17528,
+          227.52223999999998,
+          249.48264
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "plc",
+        "name": "PLC (Programmable Logic Controller)",
+        "box": [
+          291.38752,
+          189.68592,
+          329.45216000000005,
+          246.26639999999998
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "contactor",
+        "name": "Contactor",
+        "box": [
+          459.21152,
+          187.17144000000002,
+          495.6416,
+          244.46472
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "plc",
+        "name": "PLC (Programmable Logic Controller)",
+        "box": [
+          300.65504000000004,
+          324.84792,
+          360.5776,
+          372.21959999999996
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "relay",
+        "name": "Control Relay",
+        "box": [
+          266.59168,
+          398.79359999999997,
+          297.72832000000005,
+          434.87616
+        ]
+      },
+      {
+        "image_id": "val_000003",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          305.17407999999995,
+          390.03000000000003,
+          333.41664,
+          445.0596
+        ]
+      },
+      {
+        "image_id": "val_000004",
+        "class_id": "vfd",
+        "name": "VFD (Variable Frequency Drive)",
+        "box": [
+          304.77184,
+          55.843199999999996,
+          343.77472,
+          141.17664
+        ]
+      },
+      {
+        "image_id": "val_000004",
+        "class_id": "relay",
+        "name": "Control Relay",
+        "box": [
+          491.52191999999997,
+          64.95768,
+          520.9747199999999,
+          150.96648
+        ]
+      },
+      {
+        "image_id": "val_000004",
+        "class_id": "plc",
+        "name": "PLC (Programmable Logic Controller)",
+        "box": [
+          132.78336,
+          157.15224,
+          233.36319999999998,
+          242.13479999999998
+        ]
+      },
+      {
+        "image_id": "val_000004",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          374.25696,
+          185.28192,
+          395.36863999999997,
+          239.50752
+        ]
+      },
+      {
+        "image_id": "val_000004",
+        "class_id": "vfd",
+        "name": "VFD (Variable Frequency Drive)",
+        "box": [
+          92.80735999999999,
+          350.74056,
+          191.49472,
+          435.35832
+        ]
+      },
+      {
+        "image_id": "val_000005",
+        "class_id": "terminal_block",
+        "name": "Terminal Block",
+        "box": [
+          351.97312,
+          118.52784,
+          361.30688,
+          134.4552
+        ]
+      },
+      {
+        "image_id": "val_000005",
+        "class_id": "plc",
+        "name": "PLC (Programmable Logic Controller)",
+        "box": [
+          476.16352,
+          96.01415999999999,
+          563.85952,
+          150.3804
+        ]
+      },
+      {
+        "image_id": "val_000005",
+        "class_id": "mcb",
+        "name": "MCB (Miniature Circuit Breaker)",
+        "box": [
+          173.83744000000002,
+          203.64527999999999,
+          205.48160000000001,
+          321.06095999999997
+        ]
+      },
+      {
+        "image_id": "val_000005",
+        "class_id": "relay",
+        "name": "Control Relay",
+        "box": [
+          223.44544,
+          228.69408000000004,
+          254.57183999999998,
+          281.42592
+        ]
+      },
+      {
+        "image_id": "val_000005",
+        "class_id": "vfd",
+        "name": "VFD (Variable Frequency Drive)",
+        "box": [
+          259.59488000000005,
+          233.60999999999999,
+          311.22624,
+          290.09112
+        ]
+      }
+    ]
+  },
+  "counts": {
+    "ground_truth": 1280,
+    "predictions": 2324
+  },
+  "status": "evaluated",
+  "backend_id": "industrial_ultralytics",
+  "confusion_matrix": {
+    "labels": [
+      "contactor",
+      "mcb",
+      "mccb",
+      "plc",
+      "power_supply",
+      "relay",
+      "terminal_block",
+      "unknown_industrial_component",
+      "vfd",
+      "__background__"
+    ],
+    "names": [
+      "Contactor",
+      "MCB (Miniature Circuit Breaker)",
+      "MCCB (Moulded Case Circuit Breaker)",
+      "PLC (Programmable Logic Controller)",
+      "Switch-Mode Power Supply",
+      "Control Relay",
+      "Terminal Block",
+      "Unknown Industrial Component",
+      "VFD (Variable Frequency Drive)",
+      "(background)"
+    ],
+    "matrix": [
+      [
+        137,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0,
+        22,
+        0,
+        3
+      ],
+      [
+        0,
+        79,
+        0,
+        0,
+        0,
+        0,
+        0,
+        56,
+        0,
+        21
+      ],
+      [
+        0,
+        0,
+        158,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        46,
+        0,
+        0,
+        0,
+        58,
+        0,
+        43
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        138,
+        0,
+        0,
+        15,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        28,
+        0,
+        124,
+        0,
+        20
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        166,
+        5,
+        0,
+        3
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        54,
+        98,
+        1
+      ],
+      [
+        125,
+        91,
+        1,
+        35,
+        140,
+        57,
+        3,
+        584,
+        100,
+        0
+      ]
+    ],
+    "per_class_accuracy": {
+      "contactor": 0.8354,
+      "mcb": 0.5064,
+      "mccb": 0.9937,
+      "plc": 0.3129,
+      "power_supply": 0.8961,
+      "relay": 0.1628,
+      "terminal_block": 0.9486,
+      "unknown_industrial_component": 0.0,
+      "vfd": 0.6405
+    },
+    "per_class_accuracy_named": {
+      "Contactor": 0.8354,
+      "MCB (Miniature Circuit Breaker)": 0.5064,
+      "MCCB (Moulded Case Circuit Breaker)": 0.9937,
+      "PLC (Programmable Logic Controller)": 0.3129,
+      "Switch-Mode Power Supply": 0.8961,
+      "Control Relay": 0.1628,
+      "Terminal Block": 0.9486,
+      "Unknown Industrial Component": 0.0,
+      "VFD (Variable Frequency Drive)": 0.6405
+    }
+  },
+  "threshold_recommendations": {
+    "plc": 0.05,
+    "vfd": 0.05,
+    "power_supply": 0.05,
+    "mccb": 0.45,
+    "unknown_industrial_component": 0.05,
+    "contactor": 0.05,
+    "terminal_block": 0.45,
+    "mcb": 0.05,
+    "relay": 0.05
+  }
+}

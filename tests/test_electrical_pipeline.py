@@ -470,14 +470,50 @@ def test_verify_bundle_rejects_disagreeing_label_sources(tmp_path):
 
 
 def test_verify_bundle_flags_a_reordered_label_space(tmp_path):
-    """A permuted label order silently mislabels every single detection."""
+    """A permuted label order silently mislabels every single detection.
+
+    It cannot be validated from the bundle alone -- a self-consistent classes.json is
+    correct if it truthfully describes the checkpoint's head and catastrophic if it does
+    not, and nothing on disk distinguishes those. An arbitrary permutation matches no
+    registered profile, so it stays a hard problem.
+    """
     scrambled = list(tax.CLASS_ORDER)
     scrambled[0], scrambled[1] = scrambled[1], scrambled[0]
     ex.write_classes_json(str(tmp_path), scrambled)
     ex.write_labels(str(tmp_path), scrambled)
     info = ex.verify_bundle(str(tmp_path))
     assert not info["ok"]
-    assert any("does not match the taxonomy" in p for p in info["problems"])
+    assert any("nor any registered profile" in p for p in info["problems"])
+
+
+def test_verify_bundle_accepts_a_registered_profile_label_space(tmp_path):
+    """A profile-scoped bundle is legitimate and must not fail verification.
+
+    core8's order is not the taxonomy's and not a prefix of it, but it is safe: the
+    runtime reads classes.json in preference to the taxonomy, and the bundle ships it.
+    Failing this case failed every profile-scoped export, and a check that fires on
+    correct bundles trains people to ignore it.
+    """
+    from training.electrical import profiles as pf
+
+    names = list(pf.CORE8.classes)
+    ex.write_classes_json(str(tmp_path), names)
+    ex.write_labels(str(tmp_path), names)
+    info = ex.verify_bundle(str(tmp_path))
+    assert not any("registered profile" in p for p in info["problems"])
+    assert info.get("label_space_profile") == "core8"
+    assert "core8" in info["taxonomy_note"]
+    assert "Serve it only against this label space" in info["taxonomy_note"]
+
+
+def test_verify_bundle_accepts_the_core15_profile_label_space(tmp_path):
+    from training.electrical import profiles as pf
+
+    names = list(pf.CORE15.classes)
+    ex.write_classes_json(str(tmp_path), names)
+    ex.write_labels(str(tmp_path), names)
+    info = ex.verify_bundle(str(tmp_path))
+    assert info.get("label_space_profile") == "core15"
 
 
 def test_verify_bundle_accepts_an_older_prefix_bundle(tmp_path):
